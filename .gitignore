@@ -1,0 +1,20 @@
+# Binaries for different OS
+code-prompt-core.exe
+code-prompt-core-linux
+
+# Test database
+test.db
+
+# Go build cache
+.cache/
+
+# Go module cache
+.go/
+
+# IDE-related files
+.idea/
+.vscode/
+
+# Operating System files
+.DS_Store
+Thumbs.db
