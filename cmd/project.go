@@ -6,11 +6,11 @@ import (
 	"os"
 
 	"code-prompt-core/pkg/database"
+
 	"github.com/spf13/cobra"
 )
 
 // Response is the standardized JSON response structure.
-
 type Response struct {
 	Status  string      `json:"status"`
 	Data    interface{} `json:"data,omitempty"`
@@ -37,12 +37,50 @@ func printError(err error) {
 
 var projectCmd = &cobra.Command{
 	Use:   "project",
-	Short: "Manage projects",
+	Short: "Manage projects within the database",
+	Long:  `The "project" command group allows you to add, list, and delete project records in the database.`,
+}
+
+var projectAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Adds a new project to the database without scanning",
+	Long: `This lightweight command creates a project record, allowing profile management or other configurations before the first scan.
+It will not return an error if the project already exists.
+
+Example Usage:
+./code-prompt-core.exe project add --db my.db --project-path /path/to/my-new-project
+`,
+	Run: func(cmd *cobra.Command, args []string) {
+		dbPath, _ := cmd.Flags().GetString("db")
+		projectPath, _ := cmd.Flags().GetString("project-path")
+
+		db, err := database.InitializeDB(dbPath)
+		if err != nil {
+			printError(fmt.Errorf("error initializing database: %w", err))
+			return
+		}
+		defer db.Close()
+
+		// Use INSERT OR IGNORE to prevent errors if the project already exists.
+		insertSQL := `INSERT OR IGNORE INTO projects(project_path, last_scan_timestamp) VALUES(?, ?)`
+		_, err = db.Exec(insertSQL, projectPath, "not_scanned_yet")
+		if err != nil {
+			printError(fmt.Errorf("error adding project: %w", err))
+			return
+		}
+
+		printJSON(fmt.Sprintf("Project '%s' is ready for configuration.", projectPath))
+	},
 }
 
 var projectListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all projects",
+	Short: "List all projects stored in the database",
+	Long: `Retrieves and displays a list of all projects currently managed in the specified database file, along with their last scan timestamp.
+
+Example Usage:
+./code-prompt-core.exe project list --db my.db
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 		dbPath, _ := cmd.Flags().GetString("db")
 		db, err := database.InitializeDB(dbPath)
@@ -60,7 +98,7 @@ var projectListCmd = &cobra.Command{
 		defer rows.Close()
 
 		type Project struct {
-			ProjectPath      string `json:"project_path"`
+			ProjectPath       string `json:"project_path"`
 			LastScanTimestamp string `json:"last_scan_timestamp"`
 		}
 
@@ -80,7 +118,13 @@ var projectListCmd = &cobra.Command{
 
 var projectDeleteCmd = &cobra.Command{
 	Use:   "delete",
-	Short: "Delete a project",
+	Short: "Delete a project and all its associated data",
+	Long: `Deletes a project record from the database.
+Due to 'ON DELETE CASCADE' in the database schema, this will also automatically delete all associated file metadata and saved profiles for that project.
+
+Example Usage:
+./code-prompt-core.exe project delete --db my.db --project-path /path/to/project-to-delete
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 		dbPath, _ := cmd.Flags().GetString("db")
 		projectPath, _ := cmd.Flags().GetString("project-path")
@@ -104,12 +148,19 @@ var projectDeleteCmd = &cobra.Command{
 			return
 		}
 
-		printJSON(fmt.Sprintf("Project '%s' deleted successfully.", projectPath))
+		printJSON(fmt.Sprintf("Project '%s' and all its data deleted successfully.", projectPath))
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(projectCmd)
+
+	projectCmd.AddCommand(projectAddCmd)
+	projectAddCmd.Flags().String("db", "", "Path to the database file")
+	projectAddCmd.MarkFlagRequired("db")
+	projectAddCmd.Flags().String("project-path", "", "Path to the project")
+	projectAddCmd.MarkFlagRequired("project-path")
+
 	projectCmd.AddCommand(projectListCmd)
 	projectListCmd.Flags().String("db", "", "Path to the database file")
 	projectListCmd.MarkFlagRequired("db")
@@ -119,4 +170,5 @@ func init() {
 	projectDeleteCmd.MarkFlagRequired("db")
 	projectDeleteCmd.Flags().String("project-path", "", "Path to the project")
 	projectDeleteCmd.MarkFlagRequired("project-path")
+
 }

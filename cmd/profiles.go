@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"code-prompt-core/pkg/database"
+
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +17,8 @@ var profilesCmd = &cobra.Command{
 var profilesSaveCmd = &cobra.Command{
 	Use:   "save",
 	Short: "Save a filter profile",
-	Long: `Saves a filter configuration as a named profile.
+	Long: `Saves or updates a filter configuration as a named profile.
+If a profile with the same name already exists for the project, it will be overwritten.
 The --data flag accepts a JSON string with the same structure as the --filter-json flag in the 'analyze:filter' command.
 
 Example:
@@ -41,7 +43,17 @@ Example:
 			return
 		}
 
-		_, err = db.Exec("INSERT INTO profiles (project_id, profile_name, profile_data_json) VALUES (?, ?, ?)", projectID, profileName, profileData)
+		// --- Start of change ---
+		// Using UPSERT logic. If the profile name already exists for the project, it updates it.
+		upsertSQL := `
+		INSERT INTO profiles (project_id, profile_name, profile_data_json)
+		VALUES (?, ?, ?)
+		ON CONFLICT(project_id, profile_name) DO UPDATE SET
+			profile_data_json = excluded.profile_data_json;
+		`
+		_, err = db.Exec(upsertSQL, projectID, profileName, profileData)
+		// --- End of change ---
+
 		if err != nil {
 			printError(fmt.Errorf("error saving profile: %w", err))
 			return
