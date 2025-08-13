@@ -7,6 +7,7 @@ import (
 	"code-prompt-core/pkg/database"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var profilesCmd = &cobra.Command{
@@ -17,48 +18,33 @@ var profilesCmd = &cobra.Command{
 var profilesSaveCmd = &cobra.Command{
 	Use:   "save",
 	Short: "Save a filter profile",
-	Long: `Saves or updates a filter configuration as a named profile.
-If a profile with the same name already exists for the project, it will be overwritten.
-The --data flag accepts a JSON string with the same structure as the --filter-json flag in the 'analyze:filter' command.
-
-Example:
---data '{"excludedExtensions":[".tmp", ".bak"], "isTextOnly":true}'`,
+	Long:  `Saves or updates a filter configuration as a named profile.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		dbPath, _ := cmd.Flags().GetString("db")
-		projectPath, _ := cmd.Flags().GetString("project-path")
-		profileName, _ := cmd.Flags().GetString("name")
-		profileData, _ := cmd.Flags().GetString("data")
-
-		db, err := database.InitializeDB(dbPath)
+		projectPath := viper.GetString("profiles.save.project-path")
+		profileName := viper.GetString("profiles.save.name")
+		profileData := viper.GetString("profiles.save.data")
+		if projectPath == "" || profileName == "" || profileData == "" {
+			printError(fmt.Errorf("--project-path, --name, and --data are required"))
+			return
+		}
+		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
 			return
 		}
 		defer db.Close()
-
 		var projectID int64
 		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-
-		// --- Start of change ---
-		// Using UPSERT logic. If the profile name already exists for the project, it updates it.
-		upsertSQL := `
-		INSERT INTO profiles (project_id, profile_name, profile_data_json)
-		VALUES (?, ?, ?)
-		ON CONFLICT(project_id, profile_name) DO UPDATE SET
-			profile_data_json = excluded.profile_data_json;
-		`
+		upsertSQL := `INSERT INTO profiles (project_id, profile_name, profile_data_json) VALUES (?, ?, ?) ON CONFLICT(project_id, profile_name) DO UPDATE SET profile_data_json = excluded.profile_data_json;`
 		_, err = db.Exec(upsertSQL, projectID, profileName, profileData)
-		// --- End of change ---
-
 		if err != nil {
 			printError(fmt.Errorf("error saving profile: %w", err))
 			return
 		}
-
 		printJSON(fmt.Sprintf("Profile '%s' saved successfully.", profileName))
 	},
 }
@@ -67,45 +53,44 @@ var profilesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all profiles for a project",
 	Run: func(cmd *cobra.Command, args []string) {
-		dbPath, _ := cmd.Flags().GetString("db")
-		projectPath, _ := cmd.Flags().GetString("project-path")
-
-		db, err := database.InitializeDB(dbPath)
+		projectPath := viper.GetString("profiles.list.project-path")
+		if projectPath == "" {
+			printError(fmt.Errorf("--project-path is required"))
+			return
+		}
+		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
 			return
 		}
 		defer db.Close()
-
 		var projectID int64
 		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-
 		rows, err := db.Query("SELECT profile_name, profile_data_json FROM profiles WHERE project_id = ?", projectID)
 		if err != nil {
 			printError(fmt.Errorf("error listing profiles: %w", err))
 			return
 		}
 		defer rows.Close()
-
 		type Profile struct {
-			Name string `json:"name"`
-			Data string `json:"data"`
+			Name string          `json:"name"`
+			Data json.RawMessage `json:"data"`
 		}
-
 		var profiles []Profile
 		for rows.Next() {
 			var p Profile
-			if err := rows.Scan(&p.Name, &p.Data); err != nil {
+			var dataStr string
+			if err := rows.Scan(&p.Name, &dataStr); err != nil {
 				printError(fmt.Errorf("error scanning row: %w", err))
 				return
 			}
+			p.Data = json.RawMessage(dataStr)
 			profiles = append(profiles, p)
 		}
-
 		printJSON(profiles)
 	},
 }
@@ -114,38 +99,35 @@ var profilesLoadCmd = &cobra.Command{
 	Use:   "load",
 	Short: "Load a filter profile",
 	Run: func(cmd *cobra.Command, args []string) {
-		dbPath, _ := cmd.Flags().GetString("db")
-		projectPath, _ := cmd.Flags().GetString("project-path")
-		profileName, _ := cmd.Flags().GetString("name")
-
-		db, err := database.InitializeDB(dbPath)
+		projectPath := viper.GetString("profiles.load.project-path")
+		profileName := viper.GetString("profiles.load.name")
+		if projectPath == "" || profileName == "" {
+			printError(fmt.Errorf("--project-path and --name are required"))
+			return
+		}
+		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
 			return
 		}
 		defer db.Close()
-
 		var projectID int64
 		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-
 		var profileData string
 		err = db.QueryRow("SELECT profile_data_json FROM profiles WHERE project_id = ? AND profile_name = ?", projectID, profileName).Scan(&profileData)
 		if err != nil {
 			printError(fmt.Errorf("error loading profile: %w", err))
 			return
 		}
-
-		// Attempt to unmarshal to verify it's valid JSON, then return the raw string
 		var js json.RawMessage
 		if err := json.Unmarshal([]byte(profileData), &js); err != nil {
 			printError(fmt.Errorf("profile data is not valid JSON: %w", err))
 			return
 		}
-
 		printJSON(js)
 	},
 }
@@ -154,71 +136,62 @@ var profilesDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete a filter profile",
 	Run: func(cmd *cobra.Command, args []string) {
-		dbPath, _ := cmd.Flags().GetString("db")
-		projectPath, _ := cmd.Flags().GetString("project-path")
-		profileName, _ := cmd.Flags().GetString("name")
-
-		db, err := database.InitializeDB(dbPath)
+		projectPath := viper.GetString("profiles.delete.project-path")
+		profileName := viper.GetString("profiles.delete.name")
+		if projectPath == "" || profileName == "" {
+			printError(fmt.Errorf("--project-path and --name are required"))
+			return
+		}
+		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
 			return
 		}
 		defer db.Close()
-
 		var projectID int64
 		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-
 		result, err := db.Exec("DELETE FROM profiles WHERE project_id = ? AND profile_name = ?", projectID, profileName)
 		if err != nil {
 			printError(fmt.Errorf("error deleting profile: %w", err))
 			return
 		}
-
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
 			printError(fmt.Errorf("no profile found with name: %s", profileName))
 			return
 		}
-
 		printJSON(fmt.Sprintf("Profile '%s' deleted successfully.", profileName))
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(profilesCmd)
+
 	profilesCmd.AddCommand(profilesSaveCmd)
-	profilesSaveCmd.Flags().String("db", "", "Path to the database file")
-	profilesSaveCmd.MarkFlagRequired("db")
 	profilesSaveCmd.Flags().String("project-path", "", "Path to the project")
-	profilesSaveCmd.MarkFlagRequired("project-path")
 	profilesSaveCmd.Flags().String("name", "", "Name of the profile")
-	profilesSaveCmd.MarkFlagRequired("name")
 	profilesSaveCmd.Flags().String("data", "", "JSON data for the profile")
-	profilesSaveCmd.MarkFlagRequired("data")
+	viper.BindPFlag("profiles.save.project-path", profilesSaveCmd.Flags().Lookup("project-path"))
+	viper.BindPFlag("profiles.save.name", profilesSaveCmd.Flags().Lookup("name"))
+	viper.BindPFlag("profiles.save.data", profilesSaveCmd.Flags().Lookup("data"))
 
 	profilesCmd.AddCommand(profilesListCmd)
-	profilesListCmd.Flags().String("db", "", "Path to the database file")
-	profilesListCmd.MarkFlagRequired("db")
 	profilesListCmd.Flags().String("project-path", "", "Path to the project")
-	profilesListCmd.MarkFlagRequired("project-path")
+	viper.BindPFlag("profiles.list.project-path", profilesListCmd.Flags().Lookup("project-path"))
 
 	profilesCmd.AddCommand(profilesLoadCmd)
-	profilesLoadCmd.Flags().String("db", "", "Path to the database file")
-	profilesLoadCmd.MarkFlagRequired("db")
 	profilesLoadCmd.Flags().String("project-path", "", "Path to the project")
-	profilesLoadCmd.MarkFlagRequired("project-path")
 	profilesLoadCmd.Flags().String("name", "", "Name of the profile")
-	profilesLoadCmd.MarkFlagRequired("name")
+	viper.BindPFlag("profiles.load.project-path", profilesLoadCmd.Flags().Lookup("project-path"))
+	viper.BindPFlag("profiles.load.name", profilesLoadCmd.Flags().Lookup("name"))
 
 	profilesCmd.AddCommand(profilesDeleteCmd)
-	profilesDeleteCmd.Flags().String("db", "", "Path to the database file")
-	profilesDeleteCmd.MarkFlagRequired("db")
 	profilesDeleteCmd.Flags().String("project-path", "", "Path to the project")
-	profilesDeleteCmd.MarkFlagRequired("project-path")
 	profilesDeleteCmd.Flags().String("name", "", "Name of the profile")
-	profilesDeleteCmd.MarkFlagRequired("name")
+	viper.BindPFlag("profiles.delete.project-path", profilesDeleteCmd.Flags().Lookup("project-path"))
+	viper.BindPFlag("profiles.delete.name", profilesDeleteCmd.Flags().Lookup("name"))
 }

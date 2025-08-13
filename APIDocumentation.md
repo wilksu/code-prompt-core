@@ -1,12 +1,14 @@
 # Code Prompt Core - API Documentation
 
-> Generated on: 
-
+> Generated on: 2025-08-13 00:03:35 CST
 
 # code-prompt-core (Root Command)
 
 ```text
-A standalone command-line tool that can be called by various user interfaces to analyze codebases.
+Code Prompt Core is a standalone command-line tool that can be called by various user interfaces to analyze codebases.
+
+It serves as the backend engine, handling file system scanning, data caching, analysis, and report generation.
+All configurations can be managed via a central configuration file or overridden by command-line flags.
 
 Usage:
   code-prompt-core [command]
@@ -20,17 +22,21 @@ Available Commands:
   help        Help about any command
   profiles    Manage filter profiles
   project     Manage projects within the database
+  report      Generate reports from project data
+
+Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
 Use "code-prompt-core [command] --help" for more information about a command.
 
 ```
-
 ---
 
 ### code-prompt-core analyze
 
 ```text
-The "analyze" command group provides tools to filter, query, and generate insights from the cached project data without re-scanning the file system.
+The "analyze" command group provides tools to query and generate insights from the cached project data without re-scanning the file system. All analysis commands operate on the existing data in the database, making them very fast.
 
 Usage:
   code-prompt-core analyze [command]
@@ -40,184 +46,152 @@ Available Commands:
   stats       Generate statistics about the project's cached files
   tree        Generate a file structure tree from the cache
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core analyze [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core analyze filter
 
 ```text
-Filters the cached file metadata based on various criteria provided via flags.
+Filters the cached file metadata based on various criteria. 
+This command is useful for getting a specific subset of file information from the project.
 
-The main filtering mechanism is --filter-json, which accepts a JSON string with the following keys:
-- "excludedExtensions": An array of strings. To exclude files with no extension, use the special string "no_extension". Example: ["go", "md", "no_extension"]
-- "excludedPrefixes": An array of strings representing path prefixes to exclude. Example: ["cmd/"]
+The primary filtering mechanism is --filter-json, which accepts a JSON string with the following keys:
+- "excludedExtensions": An array of strings. To exclude files with no extension, use "no_extension". Example: ["go", "md"]
+- "excludedPrefixes": An array of path prefixes to exclude. Example: ["cmd/"]
 - "isTextOnly": A boolean that, if true, only includes text files.
 
-Sorting and pagination are supported via dedicated flags.
-
-Example Usage:
-  # Get the 50 largest files, sorted by size descending
-  ./code-prompt-core.exe analyze filter --db my.db --project-path /p/project --sort-by size_bytes --sort-order desc --limit 50
-
+Example:
   # Get all text files, excluding .md files and files in the 'vendor/' directory
-  ./code-prompt-core.exe analyze filter --db my.db --project-path /p/project --filter-json '{"isTextOnly":true, "excludedExtensions":[".md"], "excludedPrefixes":["vendor/"]}'
+  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"isTextOnly":true, "excludedExtensions":[".md"], "excludedPrefixes":["vendor/"]}'
 
 Usage:
   code-prompt-core analyze filter [flags]
 
 Flags:
-      --db string             Path to the database file
       --filter-json string    JSON string with filter conditions
-      --limit int             Limit the number of results (-1 for no limit) (default -1)
-      --offset int            Offset for pagination
       --project-path string   Path to the project
-      --sort-by string        Column to sort by (relative_path, filename, size_bytes, line_count) (default "relative_path")
-      --sort-order string     Sort order (asc or desc) (default "asc")
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
 ```
-
 ---
 
 #### code-prompt-core analyze stats
 
 ```text
 Generates statistical information about the project's current cache.
-It groups files by their extension and provides counts, total size, and total lines for each type, as well as overall totals.
+It groups files by their extension and provides counts, total size, and total lines for each type, as well as overall totals. This command gives a high-level overview of the project's composition.
 
-Example Usage:
-  ./code-prompt-core.exe analyze stats --db my.db --project-path /path/to/project
+Example:
+  code-prompt-core analyze stats --project-path /path/to/project
 
 Usage:
   code-prompt-core analyze stats [flags]
 
 Flags:
-      --db string             Path to the database file
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core analyze tree
 
 ```text
-Generates a file structure tree based on the cached data, optionally annotating nodes based on filter criteria.
-The default output is a structured JSON object, ideal for UIs. A plain text format is also available.
+Generates a file structure tree based on the cached data.
+
+This command can optionally "annotate" the tree, marking which files are included or excluded based on a filter profile or a temporary filter JSON. This is ideal for user interfaces that need to visually represent the file structure and filter results simultaneously.
+
+Output can be a structured JSON (default, for UIs) or plain text (for command-line viewing).
 
 Example (JSON output, annotated):
-  ./code-prompt-core.exe analyze tree --db my.db --project-path /p/proj --filter-json '{"excludedExtensions":[".md"]}'
+  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludedExtensions":[".md"]}'
 
-Example (Text output, annotated):
-  ./code-prompt-core.exe analyze tree --db my.db --project-path /p/proj --filter-json '{"excludedExtensions":[".md"]}' --format=text
+Example (Text output):
+  code-prompt-core analyze tree --project-path /p/proj --format=text
 
 Usage:
   code-prompt-core analyze tree [flags]
 
 Flags:
-      --db string             Path to the database file
-      --filter-json string    A temporary JSON string with filter conditions to use for annotating the tree
+      --filter-json string    A temporary JSON string with filter conditions
       --format string         Output format for the tree (json or text) (default "json")
       --profile-name string   Name of a saved filter profile to use for annotating the tree
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core cache
 
 ```text
-The "cache" command group contains subcommands for creating, updating, and checking the status of a project's file metadata cache.
+Contains subcommands for creating, updating, and checking the status of a project's file metadata cache.
 
 Usage:
   code-prompt-core cache [command]
 
 Available Commands:
-  status      Quickly checks if the project cache is stale
   update      Create or update the cache for a project (full or incremental)
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
 Use "code-prompt-core cache [command] --help" for more information about a command.
 
 ```
-
----
-
-#### code-prompt-core cache status
-
-```text
-Quickly checks if the project's cache is stale by comparing file system metadata with the database records.
-This is a very fast, read-only operation designed to give a UI a quick signal on whether a "cache update" is needed.
-It checks for new files, deleted files, and modified files based on their last modification time.
-
-This check respects .gitignore, but it IGNORES the default preset exclusions, because the creation of a new
-'node_modules' directory is itself a change that makes the cache stale.
-
-Usage:
-  code-prompt-core cache status [flags]
-
-Flags:
-      --db string             Path to the database file
-      --no-git-ignores        Disable .gitignore file parsing
-      --project-path string   Path to the project
-
-```
-
 ---
 
 #### code-prompt-core cache update
 
 ```text
-Performs a fresh (full) or incremental scan of the specified project and updates the cache.
+Performs a scan of the specified project and updates the cache in the database.
 
-By default, this command automatically ignores common dependency directories (like node_modules, venv, target), 
-only scans text files, and respects .gitignore rules. Use flags to modify this behavior.
+This is the core data-gathering command. It can perform two types of scans:
+1. Full Scan (default): Clears any existing data for the project and scans everything from scratch.
+2. Incremental Scan (--incremental): Much faster for subsequent scans. It compares the file system with the last cached state and only processes new, modified, or deleted files.
 
-Parameters:
-  --db <path> (string, required)
-    Path to the database file.
+This command intelligently ignores files specified in '.gitignore' and common dependency directories (like 'node_modules', 'vendor', etc.) by default. This behavior can be modified with flags.
 
-  --project-path <path> (string, required)
-    Path to the project's root directory.
-
-  --incremental (bool, optional)
-    If set, performs an efficient incremental scan. This is much faster for subsequent scans.
-
-  --no-preset-excludes (bool, optional)
-    Disable the default exclusion of common dependency directories. Use this if you need to scan inside
-    folders like 'node_modules', 'venv', 'target', etc.
-
-  --include-binary (bool, optional)
-    If set, the scan will include binary files. The default behavior is to ignore them.
-
-  --no-git-ignores (bool, optional)
-    Disable automatic parsing of .gitignore files.
-
-Example Usage:
-  # Perform an initial scan using all smart defaults
-  ./code-prompt-core.exe cache update --db my.db --project-path /path/to/project
-
-  # Perform a faster, incremental scan
-  ./code-prompt-core.exe cache update --db my.db --project-path /path/to/project --incremental
-
-  # Scan everything, including binaries and node_modules
-  ./code-prompt-core.exe cache update --db my.db --project-path /path/to/project --include-binary --no-preset-excludes
+All parameters for this command can be configured in your config file under the 'cache.update' key.
+For example:
+  cache:
+    update:
+      project-path: /path/to/my/project
+      incremental: true
+      batch-size: 200
 
 Usage:
   code-prompt-core cache update [flags]
 
 Flags:
-      --db string             Path to the database file
-      --include-binary        Include binary files in the scan (default is text-only)
-      --incremental           Perform an incremental scan instead of a full one
+      --batch-size int        Number of DB operations to batch in incremental scans (default 100)
+      --include-binary        Include binary files in the scan
+      --incremental           Perform an incremental scan
       --no-git-ignores        Disable .gitignore file parsing
-      --no-preset-excludes    Disable the default exclusion of common dependency directories
+      --no-preset-excludes    Disable default exclusion of dependency directories
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core completion
@@ -235,10 +209,13 @@ Available Commands:
   powershell  Generate the autocompletion script for powershell
   zsh         Generate the autocompletion script for zsh
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core completion [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core completion bash
@@ -271,8 +248,11 @@ Usage:
 Flags:
       --no-descriptions   disable completion descriptions
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core completion fish
@@ -296,8 +276,11 @@ Usage:
 Flags:
       --no-descriptions   disable completion descriptions
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core completion powershell
@@ -318,8 +301,11 @@ Usage:
 Flags:
       --no-descriptions   disable completion descriptions
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core completion zsh
@@ -354,8 +340,11 @@ Usage:
 Flags:
       --no-descriptions   disable completion descriptions
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core config
@@ -370,10 +359,13 @@ Available Commands:
   get         Gets the value for a given key
   set         Sets a value for a given key
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core config [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core config get
@@ -385,11 +377,13 @@ Usage:
   code-prompt-core config get [flags]
 
 Flags:
-      --db string    Path to the database file
       --key string   The configuration key to get
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core config set
@@ -401,12 +395,14 @@ Usage:
   code-prompt-core config set [flags]
 
 Flags:
-      --db string      Path to the database file
       --key string     The configuration key
       --value string   The configuration value to set
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core content
@@ -420,28 +416,33 @@ Usage:
 Available Commands:
   get         Batch gets the content of specified files for a project
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core content [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core content get
 
 ```text
-Retrieves the contents of multiple files at once. Provide a list of files with --files-json, or a filter with --profile-name or --filter-json.
+Retrieves the contents of multiple files at once using a filter.
 
 Usage:
   code-prompt-core content get [flags]
 
 Flags:
-      --db string             Path to the database file
       --filter-json string    A temporary JSON string with filter conditions to use
       --profile-name string   Name of a saved filter profile to use
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core profiles
@@ -458,10 +459,13 @@ Available Commands:
   load        Load a filter profile
   save        Save a filter profile
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core profiles [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core profiles delete
@@ -473,12 +477,14 @@ Usage:
   code-prompt-core profiles delete [flags]
 
 Flags:
-      --db string             Path to the database file
       --name string           Name of the profile
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core profiles list
@@ -490,11 +496,13 @@ Usage:
   code-prompt-core profiles list [flags]
 
 Flags:
-      --db string             Path to the database file
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core profiles load
@@ -506,41 +514,40 @@ Usage:
   code-prompt-core profiles load [flags]
 
 Flags:
-      --db string             Path to the database file
       --name string           Name of the profile
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core profiles save
 
 ```text
 Saves or updates a filter configuration as a named profile.
-If a profile with the same name already exists for the project, it will be overwritten.
-The --data flag accepts a JSON string with the same structure as the --filter-json flag in the 'analyze:filter' command.
-
-Example:
---data '{"excludedExtensions":[".tmp", ".bak"], "isTextOnly":true}'
 
 Usage:
   code-prompt-core profiles save [flags]
 
 Flags:
       --data string           JSON data for the profile
-      --db string             Path to the database file
       --name string           Name of the profile
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 ### code-prompt-core project
 
 ```text
-The "project" command group allows you to add, list, and delete project records in the database.
+The "project" command group allows you to add, list, and delete project records in the database. A project record must exist before you can manage its cache or profiles.
 
 Usage:
   code-prompt-core project [command]
@@ -550,67 +557,153 @@ Available Commands:
   delete      Delete a project and all its associated data
   list        List all projects stored in the database
 
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
 Use "code-prompt-core project [command] --help" for more information about a command.
 
 ```
-
 ---
 
 #### code-prompt-core project add
 
 ```text
-This lightweight command creates a project record, allowing profile management or other configurations before the first scan.
-It will not return an error if the project already exists.
+This lightweight command creates a project record in the database, allowing profile management or other configurations before performing the first (potentially long) scan.
+If the project already exists, this command will do nothing and will not return an error.
 
-Example Usage:
-./code-prompt-core.exe project add --db my.db --project-path /path/to/my-new-project
+Example:
+  code-prompt-core project add --project-path /path/to/my-new-project
 
 Usage:
   code-prompt-core project add [flags]
 
 Flags:
-      --db string             Path to the database file
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core project delete
 
 ```text
 Deletes a project record from the database.
-Due to 'ON DELETE CASCADE' in the database schema, this will also automatically delete all associated file metadata and saved profiles for that project.
+Due to the database schema's 'ON DELETE CASCADE' setting, this will also automatically delete all associated file metadata and saved filter profiles for that project. This action is irreversible.
 
-Example Usage:
-./code-prompt-core.exe project delete --db my.db --project-path /path/to/project-to-delete
+Example:
+  code-prompt-core project delete --project-path /path/to/project-to-delete
 
 Usage:
   code-prompt-core project delete [flags]
 
 Flags:
-      --db string             Path to the database file
       --project-path string   Path to the project
 
-```
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
+```
 ---
 
 #### code-prompt-core project list
 
 ```text
-Retrieves and displays a list of all projects currently managed in the specified database file, along with their last scan timestamp.
-
-Example Usage:
-./code-prompt-core.exe project list --db my.db
+Retrieves and displays a list of all projects currently managed in the specified database file, along with the timestamp of their last scan.
 
 Usage:
   code-prompt-core project list [flags]
 
-Flags:
-      --db string   Path to the database file
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
 
 ```
-
 ---
 
+### code-prompt-core report
+
+```text
+The "report" command group provides tools to generate rich, user-defined reports by combining various data points (stats, tree, file content) with Handlebars templates.
+
+Usage:
+  code-prompt-core report [command]
+
+Available Commands:
+  generate       Generate a report from a template
+  list-templates List all available built-in report templates
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
+Use "code-prompt-core report [command] --help" for more information about a command.
+
+```
+---
+
+#### code-prompt-core report generate
+
+```text
+This command aggregates project statistics, file structure, and file contents, then uses a Handlebars template to generate a final report file.
+
+You can use a built-in template by name, or provide a path to a custom .hbs file.
+Run 'code-prompt-core report list-templates' to see all available built-in templates.
+
+Example (using a built-in template):
+  code-prompt-core report generate --template default-md --output report.md
+
+Usage:
+  code-prompt-core report generate [flags]
+
+Flags:
+      --filter-json string    A temporary JSON string with filter conditions to use
+      --output string         Path to the output report file (default "report.md")
+      --profile-name string   Name of a saved filter profile to use for filtering content
+      --project-path string   Path to the project
+      --template string       Name of a built-in template or path to a custom .hbs file (default "default-md")
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
+```
+---
+
+#### code-prompt-core report list-templates
+
+```text
+Displays a list of all built-in templates that were compiled into the application, in JSON format.
+These template names can be used directly with the '--template' flag of the 'report generate' command.
+
+The returned JSON format is as follows:
+{
+  "status": "success",
+  "data": [
+    {
+      "name": "default-md",
+      "description": "A comprehensive report in Markdown format."
+    },
+    {
+      "name": "detailed-prompt",
+      "description": "A detailed snapshot suitable for LLM context."
+    },
+    {
+      "name": "summary-txt",
+      "description": "A concise summary in plain text format."
+    }
+  ]
+}
+
+Usage:
+  code-prompt-core report list-templates [flags]
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
+```

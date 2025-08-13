@@ -1,0 +1,53 @@
+This below content primarily focused on representing a subset of files from a local directory or repository. It also includes a section outlining the directory structure (respecting exclusions) and a summary of statistical information about the scanned files. The statistics cover the count, total size, and average size for each file type encountered.
+
+The core of the file is dedicated to presenting the content of individual files selected based on the configuration below. Files are delimited by '''--- {relative_path} ---''', indicating the file's path relative to the repository root. The file's content follows immediately after its path and continues until the next '''--- End of {relative_path} ---''' sequence.
+
+Help me gain a deeper understanding of the design and structure of this project, which I will continue to develop based on this project.
+================================================================================
+
+* Configuration Summary *
+
+- Excluded Files/Directories (Prefixes):
+{{#if config.ExcludedPrefixes}}
+{{#each config.ExcludedPrefixes}}
+  {{this}}
+{{/each}}
+{{else}}
+  None
+{{/if}}
+- Excluded File Extensions:
+{{#if config.ExcludedExtensions}}
+{{#each config.ExcludedExtensions}}
+  {{this}}
+{{/each}}
+{{else}}
+  None
+{{/if}}
+
+================================================================================
+
+* Directory Structure *
+
+{{tree.Name}}/
+{{> treePartial nodes=tree.Children indent="    "}}
+
+================================================================================
+
+* File Type Statistics *
+
+Encountered file types and statistics (sorted by total size):
+Total: {{stats.totalFiles}} files, {{humanizeBytes stats.totalSize}}, {{stats.totalLines}} lines
+------------------------------------------------------------
+{{#each stats.byExtension}}
+- .{{this.extName}}: {{this.fileCount}} files, {{humanizeBytes this.totalSize}}, {{this.totalLines}} lines {{#if this.isIncluded}}(*Content Included*){{/if}}
+{{/each}}
+
+================================================================================
+
+* Files Content *
+{{#each files}}
+
+'''--- {{ @key }} ---'''
+{{ this }}
+'''--- End of {{ @key }} ---'''
+{{/each}}

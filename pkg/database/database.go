@@ -15,25 +15,30 @@ func InitializeDB(dbPath string) (*sql.DB, error) {
 	}
 
 	statement := `
+	PRAGMA foreign_keys = ON;
+
 	CREATE TABLE IF NOT EXISTS projects (
 		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
 		project_path        TEXT NOT NULL UNIQUE,
 		last_scan_timestamp TEXT NOT NULL
 	);
+
 	CREATE TABLE IF NOT EXISTS file_metadata (
-		project_id          INTEGER NOT NULL,
-		relative_path       TEXT NOT NULL,
-		filename            TEXT NOT NULL,
-		extension           TEXT,
-		size_bytes          INTEGER NOT NULL,
-		line_count          INTEGER NOT NULL,
-		is_text             BOOLEAN NOT NULL,
-		last_mod_time       TEXT NOT NULL,
-		content_hash        TEXT NOT NULL,
+		project_id      INTEGER NOT NULL,
+		relative_path   TEXT NOT NULL,
+		filename        TEXT NOT NULL,
+		extension       TEXT,
+		size_bytes      INTEGER NOT NULL,
+		line_count      INTEGER NOT NULL,
+		is_text         BOOLEAN NOT NULL,
+		last_mod_time   TEXT NOT NULL,
+		content_hash    TEXT NOT NULL,
 		UNIQUE (project_id, relative_path),
 		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 	);
+
 	CREATE INDEX IF NOT EXISTS idx_file_metadata_project_id ON file_metadata(project_id);
+
 	CREATE TABLE IF NOT EXISTS profiles (
 		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
 		project_id          INTEGER NOT NULL,
@@ -42,10 +47,11 @@ func InitializeDB(dbPath string) (*sql.DB, error) {
 		UNIQUE (project_id, profile_name),
 		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 	);
+
 	CREATE TABLE IF NOT EXISTS kv_store (
-        key TEXT PRIMARY KEY NOT NULL,
-        value TEXT
-    );
+		key TEXT PRIMARY KEY NOT NULL,
+		value TEXT
+	);
 	`
 	_, err = db.Exec(statement)
 	if err != nil {
