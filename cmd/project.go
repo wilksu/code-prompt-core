@@ -23,9 +23,9 @@ If the project already exists, this command will do nothing and will not return 
 Example:
   code-prompt-core project add --project-path /path/to/my-new-project`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("project.add.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("flag --project-path is required"))
+		projectPath, err := getAbsoluteProjectPath("project.add.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
 		db, err := database.InitializeDB(viper.GetString("db"))
@@ -86,9 +86,9 @@ Due to the database schema's 'ON DELETE CASCADE' setting, this will also automat
 Example:
   code-prompt-core project delete --project-path /path/to/project-to-delete`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("project.delete.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("flag --project-path is required"))
+		projectPath, err := getAbsoluteProjectPath("project.delete.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
 		db, err := database.InitializeDB(viper.GetString("db"))

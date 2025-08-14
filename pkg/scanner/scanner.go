@@ -1,13 +1,16 @@
+// File: pkg/scanner/scanner.go
 package scanner
 
 import (
 	"bufio"
-	"context" // 1. 引入 context 包
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -32,25 +35,24 @@ type ScanOptions struct {
 	NoPresetExcludes bool
 }
 
-var presetExclusions = map[string]struct{}{
-	"node_modules":  {},
-	"venv":          {},
-	".venv":         {},
-	"__pycache__":   {},
-	".pytest_cache": {},
-	".tox":          {},
-	"build":         {},
-	"dist":          {},
-	".egg-info":     {},
-	"target":        {},
-	"vendor":        {},
-	".gradle":       {},
-	".idea":         {},
-	".vscode":       {},
-	".git":          {},
+var presetExclusionPatterns = []string{
+	`\.git`,
+	`node_modules`,
+	`venv`,
+	`\.venv`,
+	`__pycache__`,
+	`\.pytest_cache`,
+	`\.tox`,
+	`build`,
+	`dist`,
+	`\.egg-info`,
+	`target`,
+	`vendor`,
+	`\.gradle`,
+	`\.idea`,
+	`\.vscode`,
 }
 
-// processFile handles the heavy lifting for a single file.
 func processFile(path, projectPath string, info os.FileInfo, options ScanOptions) (FileMetadata, error) {
 	var meta FileMetadata
 
@@ -125,9 +127,19 @@ func ScanProject(projectPath string, options ScanOptions) ([]FileMetadata, error
 		ignoreMatcher, _ = gitignore.CompileIgnoreFile(filepath.Join(projectPath, ".gitignore"))
 	}
 
-	// 2. 使用 context.Background() 初始化上下文感知的 Pool
-	resultPool := pool.NewWithResults[FileMetadata]().WithErrors().WithContext(context.Background())
+	// Compile preset exclusion regex patterns once.
+	var compiledPresetExcludes []*regexp.Regexp
+	if !options.NoPresetExcludes {
+		for _, p := range presetExclusionPatterns {
+			re, err := regexp.Compile(p)
+			if err != nil {
+				return nil, fmt.Errorf("invalid preset exclusion pattern '%s': %w", p, err)
+			}
+			compiledPresetExcludes = append(compiledPresetExcludes, re)
+		}
+	}
 
+	resultPool := pool.NewWithResults[FileMetadata]().WithErrors().WithContext(context.Background())
 	pathPool := pool.New().WithMaxGoroutines(runtime.NumCPU())
 
 	walkErr := filepath.WalkDir(projectPath, func(path string, d os.DirEntry, err error) error {
@@ -141,24 +153,38 @@ func ScanProject(projectPath string, options ScanOptions) ([]FileMetadata, error
 		if err != nil {
 			return err
 		}
+
+		// NEW: Check against preset exclusions first
+		for _, re := range compiledPresetExcludes {
+			if re.MatchString(relPath) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil // Skip this file
+			}
+		}
+
+		// Check against .gitignore
+		if ignoreMatcher != nil && ignoreMatcher.MatchesPath(relPath) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		if d.IsDir() {
-			if _, exists := presetExclusions[d.Name()]; !options.NoPresetExcludes && exists {
-				return filepath.SkipDir
-			}
-			if ignoreMatcher != nil && ignoreMatcher.MatchesPath(relPath) {
-				return filepath.SkipDir
-			}
 			return nil
 		}
-		if !d.Type().IsRegular() || (ignoreMatcher != nil && ignoreMatcher.MatchesPath(relPath)) {
+
+		if !d.Type().IsRegular() {
 			return nil
 		}
+
 		pathPool.Go(func() {
 			info, err := d.Info()
 			if err != nil {
 				return
 			}
-			// 3. 为提交的函数添加 context.Context 参数
 			resultPool.Go(func(_ context.Context) (FileMetadata, error) {
 				return processFile(path, projectPath, info, options)
 			})

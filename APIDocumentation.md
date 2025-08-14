@@ -1,6 +1,6 @@
 # Code Prompt Core - API Documentation
 
-> Generated on: 2025-08-13 00:03:35 CST
+> Generated on: 2025-08-15 00:43:32 CST
 
 # code-prompt-core (Root Command)
 
@@ -20,7 +20,7 @@ Available Commands:
   config      Manage generic key-value configurations stored in the database
   content     Retrieve file contents
   help        Help about any command
-  profiles    Manage filter profiles
+  profiles    Manage filter profiles for projects
   project     Manage projects within the database
   report      Generate reports from project data
 
@@ -42,7 +42,7 @@ Usage:
   code-prompt-core analyze [command]
 
 Available Commands:
-  filter      Filter, sort, and paginate the cached file metadata
+  filter      Filter cached file metadata using JSON or a saved profile
   stats       Generate statistics about the project's cached files
   tree        Generate a file structure tree from the cache
 
@@ -58,17 +58,17 @@ Use "code-prompt-core analyze [command] --help" for more information about a com
 #### code-prompt-core analyze filter
 
 ```text
-Filters the cached file metadata based on various criteria. 
-This command is useful for getting a specific subset of file information from the project.
+Filters the cached file metadata based on various criteria provided as a JSON string.
 
-The primary filtering mechanism is --filter-json, which accepts a JSON string with the following keys:
-- "excludedExtensions": An array of strings. To exclude files with no extension, use "no_extension". Example: ["go", "md"]
-- "excludedPrefixes": An array of path prefixes to exclude. Example: ["cmd/"]
-- "isTextOnly": A boolean that, if true, only includes text files.
+The filter JSON should have the following structure:
+{
+  "includes": ["\.go$", "\.md$"],
+  "excludes": ["^vendor/"],
+  "priority": "includes"
+}
 
 Example:
-  # Get all text files, excluding .md files and files in the 'vendor/' directory
-  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"isTextOnly":true, "excludedExtensions":[".md"], "excludedPrefixes":["vendor/"]}'
+  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includes":[".*\\.go"]}'
 
 Usage:
   code-prompt-core analyze filter [flags]
@@ -109,17 +109,10 @@ Global Flags:
 #### code-prompt-core analyze tree
 
 ```text
-Generates a file structure tree based on the cached data.
-
-This command can optionally "annotate" the tree, marking which files are included or excluded based on a filter profile or a temporary filter JSON. This is ideal for user interfaces that need to visually represent the file structure and filter results simultaneously.
-
-Output can be a structured JSON (default, for UIs) or plain text (for command-line viewing).
+Generates a file structure tree, optionally annotating it based on a filter.
 
 Example (JSON output, annotated):
-  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludedExtensions":[".md"]}'
-
-Example (Text output):
-  code-prompt-core analyze tree --project-path /p/proj --format=text
+  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludes":["\\.md$"]}'
 
 Usage:
   code-prompt-core analyze tree [flags]
@@ -428,14 +421,15 @@ Use "code-prompt-core content [command] --help" for more information about a com
 #### code-prompt-core content get
 
 ```text
-Retrieves the contents of multiple files at once using a filter.
+Retrieves the contents of multiple files at once using regex filters.
 
 Usage:
   code-prompt-core content get [flags]
 
 Flags:
-      --filter-json string    A temporary JSON string with filter conditions to use
-      --profile-name string   Name of a saved filter profile to use
+      --excludes string       Comma-separated regex for files to exclude
+      --includes string       Comma-separated regex for files to include
+      --priority string       Priority if a file matches both lists ('includes' or 'excludes') (default "includes")
       --project-path string   Path to the project
 
 Global Flags:
@@ -448,16 +442,16 @@ Global Flags:
 ### code-prompt-core profiles
 
 ```text
-Manage filter profiles
+A filter profile is a saved set of filter rules that can be reused across different commands. This command group allows you to save, list, load, and delete these profiles.
 
 Usage:
   code-prompt-core profiles [command]
 
 Available Commands:
   delete      Delete a filter profile
-  list        List all profiles for a project
-  load        Load a filter profile
-  save        Save a filter profile
+  list        List all saved profiles for a project
+  load        Load and display a specific filter profile
+  save        Save or update a filter profile
 
 Global Flags:
       --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
@@ -471,13 +465,13 @@ Use "code-prompt-core profiles [command] --help" for more information about a co
 #### code-prompt-core profiles delete
 
 ```text
-Delete a filter profile
+Deletes a named filter profile from a project. This action is irreversible.
 
 Usage:
   code-prompt-core profiles delete [flags]
 
 Flags:
-      --name string           Name of the profile
+      --name string           Name of the profile to delete
       --project-path string   Path to the project
 
 Global Flags:
@@ -490,7 +484,7 @@ Global Flags:
 #### code-prompt-core profiles list
 
 ```text
-List all profiles for a project
+Retrieves and displays all filter profiles that have been saved for a specific project.
 
 Usage:
   code-prompt-core profiles list [flags]
@@ -508,13 +502,13 @@ Global Flags:
 #### code-prompt-core profiles load
 
 ```text
-Load a filter profile
+Loads a single, named filter profile for a project and displays its JSON content.
 
 Usage:
   code-prompt-core profiles load [flags]
 
 Flags:
-      --name string           Name of the profile
+      --name string           Name of the profile to load
       --project-path string   Path to the project
 
 Global Flags:
@@ -527,14 +521,29 @@ Global Flags:
 #### code-prompt-core profiles save
 
 ```text
-Saves or updates a filter configuration as a named profile.
+Saves a filter configuration as a named profile for a specific project. If a profile with the same name already exists, it will be updated.
+
+The filter configuration must be provided as a JSON string via the --data flag.
+The JSON structure should be:
+{
+  "includes": ["<regex1>", "<regex2>", ...],
+  "excludes": ["<regex3>", "<regex4>", ...],
+  "priority": "includes"
+}
+
+- "includes": A list of regex patterns. Files matching any of these will be included.
+- "excludes": A list of regex patterns. Files matching any of these will be excluded.
+- "priority": Optional. Can be "includes" or "excludes". Determines which rule wins if a file matches both lists. Defaults to "includes".
+
+Example:
+  code-prompt-core profiles save --project-path /p/my-go-proj --name "go-files-only" --data '{"includes":["\\.go$"]}'
 
 Usage:
   code-prompt-core profiles save [flags]
 
 Flags:
-      --data string           JSON data for the profile
-      --name string           Name of the profile
+      --data string           JSON data for the profile's filter rules
+      --name string           Name of the profile to save
       --project-path string   Path to the project
 
 Global Flags:
@@ -651,21 +660,29 @@ Use "code-prompt-core report [command] --help" for more information about a comm
 ```text
 This command aggregates project statistics, file structure, and file contents, then uses a Handlebars template to generate a final report file.
 
-You can use a built-in template by name, or provide a path to a custom .hbs file.
-Run 'code-prompt-core report list-templates' to see all available built-in templates.
+You can filter the files included in the report using either a saved profile via '--profile-name' or a temporary filter via '--filter-json'. If both are provided, '--filter-json' takes precedence.
 
-Example (using a built-in template):
-  code-prompt-core report generate --template default-md --output report.md
+The filter JSON structure is:
+{
+  "includes": ["<regex1>", ...],
+  "excludes": ["<regex2>", ...],
+  "priority": "includes" // or "excludes"
+}
+
+If the '--output' flag is provided with a file path, the report is saved to that file. Otherwise, the report content is printed directly to the standard output.
+
+Example (using a built-in template and a filter):
+  code-prompt-core report generate --template summary.txt --filter-json '{"includes":["\\.go$"]}' --output report.txt
 
 Usage:
   code-prompt-core report generate [flags]
 
 Flags:
-      --filter-json string    A temporary JSON string with filter conditions to use
-      --output string         Path to the output report file (default "report.md")
+      --filter-json string    A temporary JSON string with filter conditions to use (overrides profile-name)
+      --output string         Path to the output report file. If empty, prints to stdout.
       --profile-name string   Name of a saved filter profile to use for filtering content
       --project-path string   Path to the project
-      --template string       Name of a built-in template or path to a custom .hbs file (default "default-md")
+      --template string       Name of a built-in template or path to a custom .hbs file (default "summary.txt")
 
 Global Flags:
       --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
@@ -685,17 +702,10 @@ The returned JSON format is as follows:
   "status": "success",
   "data": [
     {
-      "name": "default-md",
-      "description": "A comprehensive report in Markdown format."
-    },
-    {
-      "name": "detailed-prompt",
-      "description": "A detailed snapshot suitable for LLM context."
-    },
-    {
-      "name": "summary-txt",
-      "description": "A concise summary in plain text format."
+      "name": "summary.txt",
+      "description": "A built-in report template."
     }
+    // ... other templates
   ]
 }
 

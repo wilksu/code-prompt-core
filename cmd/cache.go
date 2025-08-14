@@ -38,9 +38,9 @@ For example:
       incremental: true
       batch-size: 200`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("cache.update.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("project-path is required either as a flag or in the config file"))
+		projectPath, err := getAbsoluteProjectPath("cache.update.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
 		scanOpts := scanner.ScanOptions{

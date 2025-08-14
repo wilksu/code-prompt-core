@@ -1,11 +1,12 @@
+// File: cmd/report.go
 package cmd
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -37,21 +38,13 @@ The returned JSON format is as follows:
   "status": "success",
   "data": [
     {
-      "name": "default-md",
-      "description": "A comprehensive report in Markdown format."
-    },
-    {
-      "name": "detailed-prompt",
-      "description": "A detailed snapshot suitable for LLM context."
-    },
-    {
-      "name": "summary-txt",
-      "description": "A concise summary in plain text format."
+      "name": "summary.txt",
+      "description": "A built-in report template."
     }
+    // ... other templates
   ]
 }`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// MODIFIED: Changed output to JSON for UI integration.
 		type templateListOutput struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
@@ -64,7 +57,6 @@ The returned JSON format is as follows:
 				Description: t.Description,
 			})
 		}
-
 		printJSON(output)
 	},
 }
@@ -74,19 +66,33 @@ var reportGenerateCmd = &cobra.Command{
 	Short: "Generate a report from a template",
 	Long: `This command aggregates project statistics, file structure, and file contents, then uses a Handlebars template to generate a final report file.
 
-You can use a built-in template by name, or provide a path to a custom .hbs file.
-Run 'code-prompt-core report list-templates' to see all available built-in templates.
+You can filter the files included in the report using either a saved profile via '--profile-name' or a temporary filter via '--filter-json'. If both are provided, '--filter-json' takes precedence.
 
-Example (using a built-in template):
-  code-prompt-core report generate --template default-md --output report.md`,
+The filter JSON structure is:
+{
+  "includes": ["<regex1>", ...],
+  "excludes": ["<regex2>", ...],
+  "priority": "includes" // or "excludes"
+}
+
+If the '--output' flag is provided with a file path, the report is saved to that file. Otherwise, the report content is printed directly to the standard output.
+
+Example (using a built-in template and a filter):
+  code-prompt-core report generate --template summary.txt --filter-json '{"includes":["\\.go$"]}' --output report.txt`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("report.generate.project-path")
 		templateIdentifier := viper.GetString("report.generate.template")
 		outputPath := viper.GetString("report.generate.output")
-		if projectPath == "" || templateIdentifier == "" || outputPath == "" {
-			printError(fmt.Errorf("--project-path, --template, and --output are required"))
+		if templateIdentifier == "" {
+			printError(fmt.Errorf("--template is required"))
 			return
 		}
+
+		absProjectPath, err := getAbsoluteProjectPath("report.generate.project-path")
+		if err != nil {
+			printError(err)
+			return
+		}
+
 		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
@@ -94,11 +100,13 @@ Example (using a built-in template):
 		}
 		defer db.Close()
 		var projectID int64
-		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
 		if err != nil {
-			printError(fmt.Errorf("error finding project: %w", err))
+			printError(fmt.Errorf("error finding project '%s': %w", absProjectPath, err))
 			return
 		}
+
+		// Setup Raymond helpers
 		raymond.RegisterHelper("humanizeBytes", func(bytes int64) string {
 			return humanize.Bytes(uint64(bytes))
 		})
@@ -108,39 +116,63 @@ Example (using a built-in template):
 			return
 		}
 		if strings.Contains(templateContent, "{{> treePartial") {
-			treePartial := `{{#each nodes}}{{this.indent}}├── {{this.Name}} {{#if this.SizeBytes}}({{humanizeBytes this.SizeBytes}}){{/if}}{{#if this.isDir}}/{{/if}}
+			treePartial := `{{#each nodes}}{{this.indent}}├── {{{this.Name}}} {{#if this.SizeBytes}}({{humanizeBytes this.SizeBytes}}){{/if}}{{#if this.isDir}}/{{/if}}
 {{#if this.Children}}{{> treePartial nodes=this.Children indent=(append this.indent "    ")}}{{/if}}{{/each}}`
 			raymond.RegisterPartial("treePartial", treePartial)
 			raymond.RegisterHelper("append", func(base, addition string) string {
 				return base + addition
 			})
 		}
-		reportCtx, err := buildReportContext(db, projectID, projectPath, viper.GetString("report.generate.profile-name"), viper.GetString("report.generate.filter-json"))
+
+		// Use the common helper to get the filter configuration
+		// Giving precedence to filter-json if both are provided
+		profileName := viper.GetString("report.generate.profile-name")
+		filterJSON := viper.GetString("report.generate.filter-json")
+		if filterJSON != "" {
+			profileName = ""
+		}
+
+		f, err := getFilter(
+			db,
+			projectID,
+			profileName,
+			filterJSON,
+		)
+		if err != nil {
+			printError(err)
+			return
+		}
+
+		reportCtx, err := buildReportContext(db, projectID, absProjectPath, f)
 		if err != nil {
 			printError(fmt.Errorf("error building report context: %w", err))
 			return
 		}
+
 		result, err := raymond.Render(templateContent, reportCtx)
 		if err != nil {
 			printError(fmt.Errorf("error rendering template: %w", err))
 			return
 		}
-		err = os.WriteFile(outputPath, []byte(result), 0644)
-		if err != nil {
-			printError(fmt.Errorf("error writing output file '%s': %w", outputPath, err))
-			return
+
+		// Conditional output
+		if outputPath != "" {
+			err = os.WriteFile(outputPath, []byte(result), 0644)
+			if err != nil {
+				printError(fmt.Errorf("error writing output file '%s': %w", outputPath, err))
+				return
+			}
+			printJSON(map[string]string{
+				"message":    "Report generated successfully",
+				"outputPath": outputPath,
+			})
+		} else {
+			fmt.Print(result)
 		}
-		printJSON(map[string]string{
-			"message":    "Report generated successfully",
-			"outputPath": outputPath,
-		})
 	},
 }
 
-// getTemplateContent resolves the template. It first checks the dynamically loaded built-in templates,
-// then falls back to treating the identifier as a file path.
 func getTemplateContent(identifier string) (string, error) {
-	// 3. 使用 templates 包的数据来查找和读取内置模板
 	for _, t := range templates.BuiltInTemplates {
 		if t.Name == identifier {
 			contentBytes, err := templates.FS.ReadFile(t.FileName)
@@ -160,32 +192,24 @@ func getTemplateContent(identifier string) (string, error) {
 	return string(contentBytes), nil
 }
 
-// buildReportContext prepares all data needed for template rendering.
-func buildReportContext(db *sql.DB, projectID int64, projectPath, profileName, filterJSON string) (map[string]interface{}, error) {
-	f, err := getFilterConfig(db, projectID, profileName, filterJSON)
-	if err != nil {
-		return nil, err
-	}
-
+func buildReportContext(db *sql.DB, projectID int64, absProjectPath string, f filter.Filter) (map[string]interface{}, error) {
 	stats, err := getStatsData(db, projectID, f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get stats data: %w", err)
 	}
 
-	tree, err := getTreeData(db, projectID, projectPath)
+	tree, err := getTreeData(db, projectID, absProjectPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get tree data: %w", err)
 	}
 
-	contents, err := getContentsData(db, projectID, projectPath, f)
+	contents, err := getContentsData(db, projectID, absProjectPath, f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get contents data: %w", err)
 	}
-
-	absProjectPath, _ := filepath.Abs(projectPath)
 
 	ctx := map[string]interface{}{
-		"project_path":       projectPath,
+		"project_path":       absProjectPath,
 		"absolute_code_path": absProjectPath,
 		"generated_at":       time.Now().Format(time.RFC1123),
 		"config":             f,
@@ -196,7 +220,6 @@ func buildReportContext(db *sql.DB, projectID int64, projectPath, profileName, f
 	return ctx, nil
 }
 
-// TemplateStat is a richer struct for the stats template
 type TemplateStat struct {
 	ExtName    string `json:"extName"`
 	FileCount  int    `json:"fileCount"`
@@ -207,7 +230,9 @@ type TemplateStat struct {
 
 // getStatsData prepares statistics for the report.
 func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]interface{}, error) {
-	rows, err := db.Query("SELECT extension, COUNT(*), SUM(size_bytes), SUM(line_count) FROM file_metadata WHERE project_id = ? GROUP BY extension", projectID)
+	// Using GROUP_CONCAT to get all paths for a given extension, so we can check them for inclusion.
+	// This is SQLite specific.
+	rows, err := db.Query("SELECT extension, COUNT(*), SUM(size_bytes), SUM(line_count), GROUP_CONCAT(relative_path) FROM file_metadata WHERE project_id = ? GROUP BY extension", projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,15 +242,33 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 	var totalFiles, totalLines int
 	var totalSize int64
 
-	excludedExts := make(map[string]struct{})
-	for _, ext := range f.ExcludedExtensions {
-		excludedExts[strings.TrimPrefix(ext, ".")] = struct{}{}
+	// Compile regexes once
+	var includesRegex []*regexp.Regexp
+	for _, p := range f.Includes {
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(p)
+		if err == nil && re != nil {
+			includesRegex = append(includesRegex, re)
+		}
+	}
+	var excludesRegex []*regexp.Regexp
+	for _, p := range f.Excludes {
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(p)
+		if err == nil && re != nil {
+			excludesRegex = append(excludesRegex, re)
+		}
 	}
 
 	for rows.Next() {
 		var ext sql.NullString
 		var s TemplateStat
-		if err := rows.Scan(&ext, &s.FileCount, &s.TotalSize, &s.TotalLines); err != nil {
+		var relativePathsStr sql.NullString
+		if err := rows.Scan(&ext, &s.FileCount, &s.TotalSize, &s.TotalLines, &relativePathsStr); err != nil {
 			return nil, err
 		}
 
@@ -234,10 +277,24 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 			s.ExtName = ext.String
 		}
 
-		if _, excluded := excludedExts[s.ExtName]; excluded {
-			s.IsIncluded = false
-		} else {
-			s.IsIncluded = true
+		// Check if any file of this extension type is included
+		s.IsIncluded = false
+		if relativePathsStr.Valid {
+			paths := strings.Split(relativePathsStr.String, ",")
+			for _, path := range paths {
+				matchInclude := len(includesRegex) == 0 || filter.MatchesAny(path, includesRegex)
+				matchExclude := len(excludesRegex) > 0 && filter.MatchesAny(path, excludesRegex)
+
+				priority := f.Priority
+				if priority == "" {
+					priority = "includes"
+				}
+
+				if (matchInclude && !matchExclude) || (matchInclude && matchExclude && priority == "includes") {
+					s.IsIncluded = true
+					break // Found one included file, no need to check others for this extension
+				}
+			}
 		}
 
 		statsList = append(statsList, s)
@@ -258,15 +315,14 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 	}, nil
 }
 
-// getTreeData prepares the file tree structure for the report.
-func getTreeData(db *sql.DB, projectID int64, projectPath string) (*TreeNode, error) {
+func getTreeData(db *sql.DB, projectID int64, absProjectPath string) (*TreeNode, error) {
 	rows, err := db.Query("SELECT relative_path, size_bytes FROM file_metadata WHERE project_id = ? ORDER BY relative_path ASC", projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	root := &TreeNode{Name: filepath.Base(projectPath), IsDir: true}
+	root := &TreeNode{Name: filepath.Base(absProjectPath), IsDir: true}
 	nodes := make(map[string]*TreeNode)
 	nodes["."] = root
 
@@ -299,19 +355,18 @@ func getTreeData(db *sql.DB, projectID int64, projectPath string) (*TreeNode, er
 			}
 		}
 	}
-	sortTree(root)
+	sortTree(root) // sortTree is defined in cmd/analyze.go, we might need to move it to common if needed elsewhere
 	return root, nil
 }
 
-// getContentsData prepares the file contents for the report.
-func getContentsData(db *sql.DB, projectID int64, projectPath string, f filter.Filter) (map[string]string, error) {
+func getContentsData(db *sql.DB, projectID int64, absProjectPath string, f filter.Filter) (map[string]string, error) {
 	relativePaths, err := filter.GetFilteredFilePaths(db, projectID, f)
 	if err != nil {
 		return nil, err
 	}
 	contentMap := make(map[string]string)
 	for _, relPath := range relativePaths {
-		fullPath := filepath.Join(projectPath, filepath.Clean(relPath))
+		fullPath := filepath.Join(absProjectPath, filepath.Clean(relPath))
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			contentMap[relPath] = fmt.Sprintf("Error: Unable to read file. %v", err)
@@ -322,30 +377,6 @@ func getContentsData(db *sql.DB, projectID int64, projectPath string, f filter.F
 	return contentMap, nil
 }
 
-// getFilterConfig prepares the filter configuration for the report.
-func getFilterConfig(db *sql.DB, projectID int64, profileName, filterJSON string) (filter.Filter, error) {
-	var f filter.Filter
-	var finalFilterJSON string
-	if profileName != "" {
-		err := db.QueryRow("SELECT profile_data_json FROM profiles WHERE project_id = ? AND profile_name = ?", projectID, profileName).Scan(&finalFilterJSON)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return f, fmt.Errorf("profile '%s' not found", profileName)
-			}
-			return f, err
-		}
-	} else if filterJSON != "" {
-		finalFilterJSON = filterJSON
-	}
-	if finalFilterJSON != "" {
-		if err := json.Unmarshal([]byte(finalFilterJSON), &f); err != nil {
-			return f, err
-		}
-	}
-	return f, nil
-}
-
-// This init function registers all commands and their flags to Cobra and Viper.
 func init() {
 	rootCmd.AddCommand(reportCmd)
 
@@ -353,10 +384,10 @@ func init() {
 
 	reportCmd.AddCommand(reportGenerateCmd)
 	reportGenerateCmd.Flags().String("project-path", "", "Path to the project")
-	reportGenerateCmd.Flags().String("template", "default-md", "Name of a built-in template or path to a custom .hbs file")
-	reportGenerateCmd.Flags().String("output", "report.md", "Path to the output report file")
+	reportGenerateCmd.Flags().String("template", "summary.txt", "Name of a built-in template or path to a custom .hbs file")
+	reportGenerateCmd.Flags().String("output", "", "Path to the output report file. If empty, prints to stdout.")
 	reportGenerateCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use for filtering content")
-	reportGenerateCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions to use")
+	reportGenerateCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions to use (overrides profile-name)")
 	viper.BindPFlag("report.generate.project-path", reportGenerateCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("report.generate.template", reportGenerateCmd.Flags().Lookup("template"))
 	viper.BindPFlag("report.generate.output", reportGenerateCmd.Flags().Lookup("output"))

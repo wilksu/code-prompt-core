@@ -1,8 +1,8 @@
+// File: cmd/analyze.go
 package cmd
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -20,7 +20,7 @@ type TreeNode struct {
 	Path      string      `json:"path"`
 	IsDir     bool        `json:"is_dir"`
 	Status    string      `json:"status,omitempty"`
-	SizeBytes int64       `json:"size_bytes,omitempty"` // <-- 新增字段
+	SizeBytes int64       `json:"size_bytes,omitempty"`
 	Children  []*TreeNode `json:"children"`
 }
 
@@ -32,44 +32,46 @@ var analyzeCmd = &cobra.Command{
 
 var analyzeFilterCmd = &cobra.Command{
 	Use:   "filter",
-	Short: "Filter, sort, and paginate the cached file metadata",
-	Long: `Filters the cached file metadata based on various criteria. 
-This command is useful for getting a specific subset of file information from the project.
+	Short: "Filter cached file metadata using JSON or a saved profile",
+	Long: `Filters the cached file metadata based on various criteria provided as a JSON string.
 
-The primary filtering mechanism is --filter-json, which accepts a JSON string with the following keys:
-- "excludedExtensions": An array of strings. To exclude files with no extension, use "no_extension". Example: ["go", "md"]
-- "excludedPrefixes": An array of path prefixes to exclude. Example: ["cmd/"]
-- "isTextOnly": A boolean that, if true, only includes text files.
+The filter JSON should have the following structure:
+{
+  "includes": ["\.go$", "\.md$"],
+  "excludes": ["^vendor/"],
+  "priority": "includes"
+}
 
 Example:
-  # Get all text files, excluding .md files and files in the 'vendor/' directory
-  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"isTextOnly":true, "excludedExtensions":[".md"], "excludedPrefixes":["vendor/"]}'`,
+  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includes":[".*\\.go"]}'`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("analyze.filter.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("project-path is required"))
+		absProjectPath, err := getAbsoluteProjectPath("analyze.filter.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
+
 		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
 			return
 		}
 		defer db.Close()
+
 		var projectID int64
-		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-		var f filter.Filter
-		filterJSON := viper.GetString("analyze.filter.filter-json")
-		if filterJSON != "" {
-			if err := json.Unmarshal([]byte(filterJSON), &f); err != nil {
-				printError(fmt.Errorf("error parsing filter JSON: %w", err))
-				return
-			}
+
+		// Use the new helper to get the filter configuration
+		f, err := getFilter(db, projectID, "", viper.GetString("analyze.filter.filter-json"))
+		if err != nil {
+			printError(err)
+			return
 		}
+
 		paths, err := filter.GetFilteredFilePaths(db, projectID, f)
 		if err != nil {
 			printError(err)
@@ -123,11 +125,17 @@ It groups files by their extension and provides counts, total size, and total li
 Example:
   code-prompt-core analyze stats --project-path /path/to/project`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("analyze.stats.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("project-path is required"))
+		projectPath, err := getAbsoluteProjectPath("analyze.stats.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
+		absProjectPath, err := filepath.Abs(projectPath)
+		if err != nil {
+			printError(fmt.Errorf("error resolving absolute path for '%s': %w", projectPath, err))
+			return
+		}
+
 		db, err := database.InitializeDB(viper.GetString("db"))
 		if err != nil {
 			printError(fmt.Errorf("error initializing database: %w", err))
@@ -135,7 +143,7 @@ Example:
 		}
 		defer db.Close()
 		var projectID int64
-		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
@@ -182,21 +190,14 @@ Example:
 var analyzeTreeCmd = &cobra.Command{
 	Use:   "tree",
 	Short: "Generate a file structure tree from the cache",
-	Long: `Generates a file structure tree based on the cached data.
-
-This command can optionally "annotate" the tree, marking which files are included or excluded based on a filter profile or a temporary filter JSON. This is ideal for user interfaces that need to visually represent the file structure and filter results simultaneously.
-
-Output can be a structured JSON (default, for UIs) or plain text (for command-line viewing).
+	Long: `Generates a file structure tree, optionally annotating it based on a filter.
 
 Example (JSON output, annotated):
-  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludedExtensions":[".md"]}'
-
-Example (Text output):
-  code-prompt-core analyze tree --project-path /p/proj --format=text`,
+  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludes":["\\.md$"]}'`,
 	Run: func(cmd *cobra.Command, args []string) {
-		projectPath := viper.GetString("analyze.tree.project-path")
-		if projectPath == "" {
-			printError(fmt.Errorf("project-path is required"))
+		absProjectPath, err := getAbsoluteProjectPath("analyze.tree.project-path")
+		if err != nil {
+			printError(err)
 			return
 		}
 		db, err := database.InitializeDB(viper.GetString("db"))
@@ -206,32 +207,24 @@ Example (Text output):
 		}
 		defer db.Close()
 		var projectID int64
-		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
-		var f filter.Filter
-		filterJSON := viper.GetString("analyze.tree.filter-json")
-		profileName := viper.GetString("analyze.tree.profile-name")
-		if profileName != "" {
-			var profileData string
-			err := db.QueryRow("SELECT profile_data_json FROM profiles WHERE project_id = ? AND profile_name = ?", projectID, profileName).Scan(&profileData)
-			if err != nil {
-				if err == sql.ErrNoRows {
-					printError(fmt.Errorf("profile '%s' not found", profileName))
-				} else {
-					printError(fmt.Errorf("error loading profile: %w", err))
-				}
-				return
-			}
-			json.Unmarshal([]byte(profileData), &f)
-		} else if filterJSON != "" {
-			if err := json.Unmarshal([]byte(filterJSON), &f); err != nil {
-				printError(fmt.Errorf("error parsing filter JSON: %w", err))
-				return
-			}
+
+		// Use the new helper to get the filter configuration
+		f, err := getFilter(
+			db,
+			projectID,
+			viper.GetString("analyze.tree.profile-name"),
+			viper.GetString("analyze.tree.filter-json"),
+		)
+		if err != nil {
+			printError(err)
+			return
 		}
+
 		includedPaths, err := filter.GetFilteredFilePaths(db, projectID, f)
 		if err != nil {
 			printError(fmt.Errorf("error getting filtered file list: %w", err))
@@ -247,7 +240,7 @@ Example (Text output):
 			return
 		}
 		defer rows.Close()
-		root := &TreeNode{Name: filepath.Base(projectPath), Path: ".", IsDir: true}
+		root := &TreeNode{Name: filepath.Base(absProjectPath), Path: ".", IsDir: true}
 		nodes := make(map[string]*TreeNode)
 		nodes["."] = root
 		for rows.Next() {
@@ -335,7 +328,7 @@ func init() {
 
 	analyzeCmd.AddCommand(analyzeFilterCmd)
 	analyzeFilterCmd.Flags().String("project-path", "", "Path to the project")
-	analyzeFilterCmd.Flags().String("filter-json", "", "JSON string with filter conditions")
+	analyzeFilterCmd.Flags().String("filter-json", "", "JSON string with filter conditions") // Kept original flag
 	viper.BindPFlag("analyze.filter.project-path", analyzeFilterCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("analyze.filter.filter-json", analyzeFilterCmd.Flags().Lookup("filter-json"))
 
@@ -346,8 +339,8 @@ func init() {
 	analyzeCmd.AddCommand(analyzeTreeCmd)
 	analyzeTreeCmd.Flags().String("project-path", "", "Path to the project")
 	analyzeTreeCmd.Flags().String("format", "json", "Output format for the tree (json or text)")
-	analyzeTreeCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use for annotating the tree")
-	analyzeTreeCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")
+	analyzeTreeCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use for annotating the tree") // Kept original flag
+	analyzeTreeCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")                 // Kept original flag
 	viper.BindPFlag("analyze.tree.project-path", analyzeTreeCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("analyze.tree.format", analyzeTreeCmd.Flags().Lookup("format"))
 	viper.BindPFlag("analyze.tree.profile-name", analyzeTreeCmd.Flags().Lookup("profile-name"))
