@@ -7,22 +7,75 @@ Help me gain a deeper understanding of the design and structure of this project,
 
 * Configuration Summary *
 
-- Excluded Files/Directories (Prefixes):
-{{#if config.ExcludedPrefixes}}
-{{#each config.ExcludedPrefixes}}
-  {{this}}
+- Inclusion Rules:
+  - By Path:
+{{#if config.includePaths}}
+{{#each config.includePaths}}
+    - {{this}}
 {{/each}}
 {{else}}
-  None
+    (None)
 {{/if}}
-- Excluded File Extensions:
-{{#if config.ExcludedExtensions}}
-{{#each config.ExcludedExtensions}}
-  {{this}}
+  - By Extension:
+{{#if config.includeExts}}
+{{#each config.includeExts}}
+    - .{{this}}
 {{/each}}
 {{else}}
-  None
+    (None)
 {{/if}}
+  - By Prefix:
+{{#if config.includePrefixes}}
+{{#each config.includePrefixes}}
+    - {{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+  - By Regex:
+{{#if config.includeRegex}}
+{{#each config.includeRegex}}
+    - {{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+
+- Exclusion Rules:
+  - By Path:
+{{#if config.excludePaths}}
+{{#each config.excludePaths}}
+    - {{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+  - By Extension:
+{{#if config.excludeExts}}
+{{#each config.excludeExts}}
+    - .{{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+  - By Prefix:
+{{#if config.excludePrefixes}}
+{{#each config.excludePrefixes}}
+    - {{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+  - By Regex:
+{{#if config.excludeRegex}}
+{{#each config.excludeRegex}}
+    - {{this}}
+{{/each}}
+{{else}}
+    (None)
+{{/if}}
+
+- Conflict Priority: {{config.priority}}
 
 ================================================================================
 

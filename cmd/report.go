@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -293,27 +294,33 @@ func getTreeData(db *sql.DB, projectID int64, absProjectPath string) (*TreeNode,
 	nodes["."] = root
 
 	for rows.Next() {
-		var path string
+		var dbPath string
 		var size int64
-		if err := rows.Scan(&path, &size); err != nil {
+		if err := rows.Scan(&dbPath, &size); err != nil {
 			return nil, err
 		}
 
-		parts := strings.Split(path, string(filepath.Separator))
+		// *** 关键修改点2：总是使用'/'来分割从数据库读出的路径 ***
+		parts := strings.Split(dbPath, "/")
 		currentPath := ""
+
 		for i, part := range parts {
 			isDir := i < len(parts)-1
 			if i > 0 {
-				currentPath = filepath.Join(currentPath, part)
+				// *** 关键修改点3：使用 path.Join 来构建标准化的路径 ***
+				currentPath = path.Join(currentPath, part)
 			} else {
 				currentPath = part
 			}
+
 			if _, exists := nodes[currentPath]; !exists {
 				newNode := &TreeNode{Name: part, Path: currentPath, IsDir: isDir, Children: []*TreeNode{}}
 				if !isDir {
 					newNode.SizeBytes = size
 				}
-				parentPath := filepath.Dir(currentPath)
+
+				// *** 关键修改点4：使用 path.Dir 来查找父路径 ***
+				parentPath := path.Dir(currentPath)
 				if parent, ok := nodes[parentPath]; ok {
 					parent.Children = append(parent.Children, newNode)
 				}
@@ -321,6 +328,7 @@ func getTreeData(db *sql.DB, projectID int64, absProjectPath string) (*TreeNode,
 			}
 		}
 	}
+	// sortTree is defined in cmd/analyze.go, it is shared and correct.
 	sortTree(root)
 	return root, nil
 }
