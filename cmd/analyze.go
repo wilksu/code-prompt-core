@@ -4,6 +4,7 @@ package cmd
 import (
 	"database/sql"
 	"fmt"
+	"path" // *** 关键修改点1：引入 "path" 包 ***
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,15 +36,16 @@ var analyzeFilterCmd = &cobra.Command{
 	Short: "Filter cached file metadata using JSON or a saved profile",
 	Long: `Filters the cached file metadata based on various criteria provided as a JSON string.
 
-The filter JSON should have the following structure:
+The filter JSON supports both simple and advanced rules:
 {
-  "includes": ["\.go$", "\.md$"],
-  "excludes": ["^vendor/"],
+  "includeExts": ["go", "md"],
+  "excludePaths": ["vendor/"],
+  "includeRegex": ["^cmd/"],
   "priority": "includes"
 }
 
 Example:
-  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includes":[".*\\.go"]}'`,
+  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includeExts":[".go"]}'`,
 	Run: func(cmd *cobra.Command, args []string) {
 		absProjectPath, err := getAbsoluteProjectPath("analyze.filter.project-path")
 		if err != nil {
@@ -65,7 +67,6 @@ Example:
 			return
 		}
 
-		// Use the new helper to get the filter configuration
 		f, err := getFilter(db, projectID, "", viper.GetString("analyze.filter.filter-json"))
 		if err != nil {
 			printError(err)
@@ -192,8 +193,15 @@ var analyzeTreeCmd = &cobra.Command{
 	Short: "Generate a file structure tree from the cache",
 	Long: `Generates a file structure tree, optionally annotating it based on a filter.
 
+The filter (from --filter-json or --profile-name) determines which files are marked as "included".
+The filter JSON supports both simple and advanced rules:
+{
+  "excludeExts": ["md"],
+  "includePaths": ["cmd/"]
+}
+
 Example (JSON output, annotated):
-  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludes":["\\.md$"]}'`,
+  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludeExts":["md"]}'`,
 	Run: func(cmd *cobra.Command, args []string) {
 		absProjectPath, err := getAbsoluteProjectPath("analyze.tree.project-path")
 		if err != nil {
@@ -213,7 +221,6 @@ Example (JSON output, annotated):
 			return
 		}
 
-		// Use the new helper to get the filter configuration
 		f, err := getFilter(
 			db,
 			projectID,
@@ -240,24 +247,32 @@ Example (JSON output, annotated):
 			return
 		}
 		defer rows.Close()
+
+		// `filepath.Base` is safe here as it operates on the project's real path on disk
 		root := &TreeNode{Name: filepath.Base(absProjectPath), Path: ".", IsDir: true}
 		nodes := make(map[string]*TreeNode)
 		nodes["."] = root
+
 		for rows.Next() {
-			var path string
-			if err := rows.Scan(&path); err != nil {
+			var dbPath string
+			if err := rows.Scan(&dbPath); err != nil {
 				printError(fmt.Errorf("error scanning row: %w", err))
 				return
 			}
-			parts := strings.Split(path, string(filepath.Separator))
+
+			// *** 关键修改点2：总是使用'/'来分割从数据库读出的路径 ***
+			parts := strings.Split(dbPath, "/")
 			currentPath := ""
+
 			for i, part := range parts {
 				isDir := i < len(parts)-1
 				if i > 0 {
-					currentPath = filepath.Join(currentPath, part)
+					// *** 关键修改点3：使用 path.Join 来构建标准化的路径 ***
+					currentPath = path.Join(currentPath, part)
 				} else {
 					currentPath = part
 				}
+
 				if _, exists := nodes[currentPath]; !exists {
 					newNode := &TreeNode{Name: part, Path: currentPath, IsDir: isDir, Children: []*TreeNode{}}
 					if !isDir {
@@ -267,7 +282,9 @@ Example (JSON output, annotated):
 							newNode.Status = "excluded"
 						}
 					}
-					parentPath := filepath.Dir(currentPath)
+
+					// *** 关键修改点4：使用 path.Dir 来查找父路径 ***
+					parentPath := path.Dir(currentPath)
 					if parent, ok := nodes[parentPath]; ok {
 						parent.Children = append(parent.Children, newNode)
 					}
@@ -328,7 +345,7 @@ func init() {
 
 	analyzeCmd.AddCommand(analyzeFilterCmd)
 	analyzeFilterCmd.Flags().String("project-path", "", "Path to the project")
-	analyzeFilterCmd.Flags().String("filter-json", "", "JSON string with filter conditions") // Kept original flag
+	analyzeFilterCmd.Flags().String("filter-json", "", "JSON string with filter conditions")
 	viper.BindPFlag("analyze.filter.project-path", analyzeFilterCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("analyze.filter.filter-json", analyzeFilterCmd.Flags().Lookup("filter-json"))
 
@@ -339,8 +356,8 @@ func init() {
 	analyzeCmd.AddCommand(analyzeTreeCmd)
 	analyzeTreeCmd.Flags().String("project-path", "", "Path to the project")
 	analyzeTreeCmd.Flags().String("format", "json", "Output format for the tree (json or text)")
-	analyzeTreeCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use for annotating the tree") // Kept original flag
-	analyzeTreeCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")                 // Kept original flag
+	analyzeTreeCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use for annotating the tree")
+	analyzeTreeCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")
 	viper.BindPFlag("analyze.tree.project-path", analyzeTreeCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("analyze.tree.format", analyzeTreeCmd.Flags().Lookup("format"))
 	viper.BindPFlag("analyze.tree.profile-name", analyzeTreeCmd.Flags().Lookup("profile-name"))

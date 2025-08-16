@@ -24,19 +24,27 @@ var profilesSaveCmd = &cobra.Command{
 	Long: `Saves a filter configuration as a named profile for a specific project. If a profile with the same name already exists, it will be updated.
 
 The filter configuration must be provided as a JSON string via the --data flag.
-The JSON structure should be:
+The JSON structure supports both simple and advanced (regex) rules:
 {
-  "includes": ["<regex1>", "<regex2>", ...],
-  "excludes": ["<regex3>", "<regex4>", ...],
+  "includePaths": ["cmd/", "pkg/database/database.go"],
+  "excludePaths": ["vendor/"],
+  "includeExts": ["go", "md"],
+  "excludeExts": ["sum"],
+  "includePrefixes": ["main"],
+  "excludePrefixes": ["test_"],
+  
+  "includeRegex": ["\\.hbs$"],
+  "excludeRegex": ["^\\.git/"],
+  
   "priority": "includes"
 }
 
-- "includes": A list of regex patterns. Files matching any of these will be included.
-- "excludes": A list of regex patterns. Files matching any of these will be excluded.
+- Simple rules (paths, exts, prefixes) are convenient for common cases.
+- Regex rules (includeRegex, excludeRegex) provide maximum flexibility for advanced users.
 - "priority": Optional. Can be "includes" or "excludes". Determines which rule wins if a file matches both lists. Defaults to "includes".
 
 Example:
-  code-prompt-core profiles save --project-path /p/my-go-proj --name "go-files-only" --data '{"includes":["\\.go$"]}'`,
+  code-prompt-core profiles save --project-path /p/my-proj --name "go-source" --data '{"includeExts":["go"], "excludePaths": ["vendor/"]}'`,
 	Run: func(cmd *cobra.Command, args []string) {
 		profileName := viper.GetString("profiles.save.name")
 		profileData := viper.GetString("profiles.save.data")

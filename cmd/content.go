@@ -49,9 +49,14 @@ var contentGetCmd = &cobra.Command{
 		}
 
 		f := filter.Filter{
-			Includes: strings.Split(viper.GetString("content.get.includes"), ","),
-			Excludes: strings.Split(viper.GetString("content.get.excludes"), ","),
-			Priority: viper.GetString("content.get.priority"),
+			IncludeRegex: strings.Split(viper.GetString("content.get.includes"), ","),
+			ExcludeRegex: strings.Split(viper.GetString("content.get.excludes"), ","),
+			Priority:     viper.GetString("content.get.priority"),
+		}
+
+		if err := f.Compile(); err != nil {
+			printError(fmt.Errorf("error compiling filter rules: %w", err))
+			return
 		}
 
 		relativePaths, err := filter.GetFilteredFilePaths(db, projectID, f)
@@ -61,7 +66,6 @@ var contentGetCmd = &cobra.Command{
 		}
 		contentMap := make(map[string]string)
 		for _, relPath := range relativePaths {
-			// Use absProjectPath to read files
 			fullPath := filepath.Join(absProjectPath, filepath.Clean(relPath))
 			content, err := os.ReadFile(fullPath)
 			if err != nil {

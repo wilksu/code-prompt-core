@@ -42,10 +42,8 @@ func printError(err error) {
 }
 
 func getAbsoluteProjectPath(viperKey string) (string, error) {
-	// CORRECTED: Get the string from viper, not by calling itself.
 	projectPath := viper.GetString(viperKey)
 	if projectPath == "" {
-		// The error message was also incorrect, it should indicate the path is required.
 		return "", fmt.Errorf("project-path is required (viper key: %s)", viperKey)
 	}
 	absPath, err := filepath.Abs(projectPath)
@@ -55,14 +53,17 @@ func getAbsoluteProjectPath(viperKey string) (string, error) {
 	return absPath, nil
 }
 
-// getFilter is a new helper to build a filter.Filter object from command flags.
-// It centralizes the logic of loading from a profile or a direct JSON string.
+// getFilter 是一个新的帮助函数，用于从 profile 或 JSON 字符串构建 Filter 对象
+// 它集中处理加载、解析和编译过滤规则的逻辑
 func getFilter(db *sql.DB, projectID int64, profileName, filterJSON string) (filter.Filter, error) {
 	var f filter.Filter
 	var finalFilterJSON string
 
-	if profileName != "" {
-		// Load from profile
+	if filterJSON != "" {
+		// 优先使用直接传入的 filter-json
+		finalFilterJSON = filterJSON
+	} else if profileName != "" {
+		// 其次，从 profile 加载
 		err := db.QueryRow("SELECT profile_data_json FROM profiles WHERE project_id = ? AND profile_name = ?", projectID, profileName).Scan(&finalFilterJSON)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -70,9 +71,6 @@ func getFilter(db *sql.DB, projectID int64, profileName, filterJSON string) (fil
 			}
 			return f, fmt.Errorf("error loading profile: %w", err)
 		}
-	} else if filterJSON != "" {
-		// Use direct JSON string
-		finalFilterJSON = filterJSON
 	}
 
 	if finalFilterJSON != "" {
@@ -84,6 +82,11 @@ func getFilter(db *sql.DB, projectID int64, profileName, filterJSON string) (fil
 	// Set default priority if not specified
 	if f.Priority == "" {
 		f.Priority = "includes"
+	}
+
+	// 在返回之前，编译所有规则
+	if err := f.Compile(); err != nil {
+		return f, fmt.Errorf("error compiling filter rules: %w", err)
 	}
 
 	return f, nil

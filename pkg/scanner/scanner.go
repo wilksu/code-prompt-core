@@ -56,7 +56,6 @@ var presetExclusionPatterns = []string{
 func processFile(path, projectPath string, info os.FileInfo, options ScanOptions) (FileMetadata, error) {
 	var meta FileMetadata
 
-	// 1. Text/Binary Check & Open File
 	file, err := os.Open(path)
 	if err != nil {
 		return meta, err
@@ -74,10 +73,9 @@ func processFile(path, projectPath string, info os.FileInfo, options ScanOptions
 	}
 
 	if !isText && !options.IncludeBinary {
-		return FileMetadata{}, nil // Return empty struct to signal skipping
+		return FileMetadata{}, nil
 	}
 
-	// 2. Hash Calculation
 	_, err = file.Seek(0, 0)
 	if err != nil {
 		return meta, err
@@ -88,7 +86,6 @@ func processFile(path, projectPath string, info os.FileInfo, options ScanOptions
 	}
 	contentHash := hex.EncodeToString(hash.Sum(nil))
 
-	// 3. Line Count
 	lineCount := 0
 	if isText {
 		_, err = file.Seek(0, 0)
@@ -101,8 +98,10 @@ func processFile(path, projectPath string, info os.FileInfo, options ScanOptions
 		}
 	}
 
-	// 4. Assemble Metadata
 	relPath, _ := filepath.Rel(projectPath, path)
+	// *** 核心修改点：统一路径分隔符为 '/' ***
+	relPath = filepath.ToSlash(relPath)
+
 	ext := filepath.Ext(info.Name())
 	if ext != "" {
 		ext = ext[1:]
@@ -127,7 +126,6 @@ func ScanProject(projectPath string, options ScanOptions) ([]FileMetadata, error
 		ignoreMatcher, _ = gitignore.CompileIgnoreFile(filepath.Join(projectPath, ".gitignore"))
 	}
 
-	// Compile preset exclusion regex patterns once.
 	var compiledPresetExcludes []*regexp.Regexp
 	if !options.NoPresetExcludes {
 		for _, p := range presetExclusionPatterns {
@@ -153,18 +151,18 @@ func ScanProject(projectPath string, options ScanOptions) ([]FileMetadata, error
 		if err != nil {
 			return err
 		}
+		// *** 同样在这里统一分隔符，用于匹配规则 ***
+		relPath = filepath.ToSlash(relPath)
 
-		// NEW: Check against preset exclusions first
 		for _, re := range compiledPresetExcludes {
 			if re.MatchString(relPath) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
-				return nil // Skip this file
+				return nil
 			}
 		}
 
-		// Check against .gitignore
 		if ignoreMatcher != nil && ignoreMatcher.MatchesPath(relPath) {
 			if d.IsDir() {
 				return filepath.SkipDir

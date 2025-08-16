@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -41,7 +40,6 @@ The returned JSON format is as follows:
       "name": "summary.txt",
       "description": "A built-in report template."
     }
-    // ... other templates
   ]
 }`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -68,17 +66,17 @@ var reportGenerateCmd = &cobra.Command{
 
 You can filter the files included in the report using either a saved profile via '--profile-name' or a temporary filter via '--filter-json'. If both are provided, '--filter-json' takes precedence.
 
-The filter JSON structure is:
+The filter JSON structure supports both simple and advanced rules:
 {
-  "includes": ["<regex1>", ...],
-  "excludes": ["<regex2>", ...],
-  "priority": "includes" // or "excludes"
+  "includeExts": ["go"],
+  "excludePaths": ["vendor/"],
+  "priority": "includes"
 }
 
 If the '--output' flag is provided with a file path, the report is saved to that file. Otherwise, the report content is printed directly to the standard output.
 
 Example (using a built-in template and a filter):
-  code-prompt-core report generate --template summary.txt --filter-json '{"includes":["\\.go$"]}' --output report.txt`,
+  code-prompt-core report generate --template summary.txt --filter-json '{"includeExts":["go"]}' --output report.txt`,
 	Run: func(cmd *cobra.Command, args []string) {
 		templateIdentifier := viper.GetString("report.generate.template")
 		outputPath := viper.GetString("report.generate.output")
@@ -106,7 +104,6 @@ Example (using a built-in template and a filter):
 			return
 		}
 
-		// Setup Raymond helpers
 		raymond.RegisterHelper("humanizeBytes", func(bytes int64) string {
 			return humanize.Bytes(uint64(bytes))
 		})
@@ -124,19 +121,11 @@ Example (using a built-in template and a filter):
 			})
 		}
 
-		// Use the common helper to get the filter configuration
-		// Giving precedence to filter-json if both are provided
-		profileName := viper.GetString("report.generate.profile-name")
-		filterJSON := viper.GetString("report.generate.filter-json")
-		if filterJSON != "" {
-			profileName = ""
-		}
-
 		f, err := getFilter(
 			db,
 			projectID,
-			profileName,
-			filterJSON,
+			viper.GetString("report.generate.profile-name"),
+			viper.GetString("report.generate.filter-json"),
 		)
 		if err != nil {
 			printError(err)
@@ -155,7 +144,6 @@ Example (using a built-in template and a filter):
 			return
 		}
 
-		// Conditional output
 		if outputPath != "" {
 			err = os.WriteFile(outputPath, []byte(result), 0644)
 			if err != nil {
@@ -167,7 +155,8 @@ Example (using a built-in template and a filter):
 				"outputPath": outputPath,
 			})
 		} else {
-			fmt.Print(result)
+			// 将原始报告文本作为data字段的值，通过标准JSON格式输出
+			printJSON(result)
 		}
 	},
 }
@@ -228,10 +217,7 @@ type TemplateStat struct {
 	IsIncluded bool   `json:"isIncluded"`
 }
 
-// getStatsData prepares statistics for the report.
 func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]interface{}, error) {
-	// Using GROUP_CONCAT to get all paths for a given extension, so we can check them for inclusion.
-	// This is SQLite specific.
 	rows, err := db.Query("SELECT extension, COUNT(*), SUM(size_bytes), SUM(line_count), GROUP_CONCAT(relative_path) FROM file_metadata WHERE project_id = ? GROUP BY extension", projectID)
 	if err != nil {
 		return nil, err
@@ -242,27 +228,8 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 	var totalFiles, totalLines int
 	var totalSize int64
 
-	// Compile regexes once
-	var includesRegex []*regexp.Regexp
-	for _, p := range f.Includes {
-		if p == "" {
-			continue
-		}
-		re, err := regexp.Compile(p)
-		if err == nil && re != nil {
-			includesRegex = append(includesRegex, re)
-		}
-	}
-	var excludesRegex []*regexp.Regexp
-	for _, p := range f.Excludes {
-		if p == "" {
-			continue
-		}
-		re, err := regexp.Compile(p)
-		if err == nil && re != nil {
-			excludesRegex = append(excludesRegex, re)
-		}
-	}
+	compiledIncludes := f.GetCompiledIncludeRegex()
+	compiledExcludes := f.GetCompiledExcludeRegex()
 
 	for rows.Next() {
 		var ext sql.NullString
@@ -277,13 +244,12 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 			s.ExtName = ext.String
 		}
 
-		// Check if any file of this extension type is included
 		s.IsIncluded = false
 		if relativePathsStr.Valid {
 			paths := strings.Split(relativePathsStr.String, ",")
 			for _, path := range paths {
-				matchInclude := len(includesRegex) == 0 || filter.MatchesAny(path, includesRegex)
-				matchExclude := len(excludesRegex) > 0 && filter.MatchesAny(path, excludesRegex)
+				matchInclude := len(compiledIncludes) == 0 || filter.MatchesAny(path, compiledIncludes)
+				matchExclude := len(compiledExcludes) > 0 && filter.MatchesAny(path, compiledExcludes)
 
 				priority := f.Priority
 				if priority == "" {
@@ -292,7 +258,7 @@ func getStatsData(db *sql.DB, projectID int64, f filter.Filter) (map[string]inte
 
 				if (matchInclude && !matchExclude) || (matchInclude && matchExclude && priority == "includes") {
 					s.IsIncluded = true
-					break // Found one included file, no need to check others for this extension
+					break
 				}
 			}
 		}
@@ -355,7 +321,7 @@ func getTreeData(db *sql.DB, projectID int64, absProjectPath string) (*TreeNode,
 			}
 		}
 	}
-	sortTree(root) // sortTree is defined in cmd/analyze.go, we might need to move it to common if needed elsewhere
+	sortTree(root)
 	return root, nil
 }
 

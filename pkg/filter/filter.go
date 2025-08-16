@@ -4,51 +4,111 @@ package filter
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 )
 
-// Filter defines the new, unified structure for all filtering criteria using regular expressions.
 type Filter struct {
-	Includes []string `json:"includes"` // List of regex patterns to include files.
-	Excludes []string `json:"excludes"` // List of regex patterns to exclude files.
-	Priority string   `json:"priority"` // "includes" or "excludes". Determines precedence when a file matches both lists. Defaults to "includes".
+	IncludePaths    []string `json:"includePaths,omitempty"`
+	ExcludePaths    []string `json:"excludePaths,omitempty"`
+	IncludeExts     []string `json:"includeExts,omitempty"`
+	ExcludeExts     []string `json:"excludeExts,omitempty"`
+	IncludePrefixes []string `json:"includePrefixes,omitempty"`
+	ExcludePrefixes []string `json:"excludePrefixes,omitempty"`
+
+	IncludeRegex []string `json:"includeRegex,omitempty"`
+	ExcludeRegex []string `json:"excludeRegex,omitempty"`
+
+	Priority string `json:"priority"`
+
+	compiledIncludeRegex []*regexp.Regexp `json:"-"`
+	compiledExcludeRegex []*regexp.Regexp `json:"-"`
 }
 
-// GetFilteredFilePaths queries the database and applies the new regex-based filtering logic.
+func (f *Filter) Compile() error {
+	var allIncludeRegex, allExcludeRegex []string
+
+	allIncludeRegex = append(allIncludeRegex, f.IncludeRegex...)
+	allExcludeRegex = append(allExcludeRegex, f.ExcludeRegex...)
+
+	for _, path := range f.IncludePaths {
+		regexPath := regexp.QuoteMeta(filepath.ToSlash(path))
+		if !strings.HasSuffix(regexPath, "/") {
+			allIncludeRegex = append(allIncludeRegex, "^"+regexPath+"$")
+		} else {
+			allIncludeRegex = append(allIncludeRegex, "^"+regexPath+".*")
+		}
+	}
+	for _, path := range f.ExcludePaths {
+		regexPath := regexp.QuoteMeta(filepath.ToSlash(path))
+		if !strings.HasSuffix(regexPath, "/") {
+			allExcludeRegex = append(allExcludeRegex, "^"+regexPath+"$")
+		} else {
+			allExcludeRegex = append(allExcludeRegex, "^"+regexPath+".*")
+		}
+	}
+
+	for _, ext := range f.IncludeExts {
+		cleanExt := strings.TrimPrefix(ext, ".")
+		allIncludeRegex = append(allIncludeRegex, `\.`+regexp.QuoteMeta(cleanExt)+"$")
+	}
+	for _, ext := range f.ExcludeExts {
+		cleanExt := strings.TrimPrefix(ext, ".")
+		allExcludeRegex = append(allExcludeRegex, `\.`+regexp.QuoteMeta(cleanExt)+"$")
+	}
+
+	for _, prefix := range f.IncludePrefixes {
+		// *** 简化正则表达式，不再需要匹配'\\' ***
+		allIncludeRegex = append(allIncludeRegex, `(^|/)`+regexp.QuoteMeta(prefix)+".*")
+	}
+	for _, prefix := range f.ExcludePrefixes {
+		// *** 简化正则表达式，不再需要匹配'\\' ***
+		allExcludeRegex = append(allExcludeRegex, `(^|/)`+regexp.QuoteMeta(prefix)+".*")
+	}
+
+	f.compiledIncludeRegex = []*regexp.Regexp{}
+	for _, p := range allIncludeRegex {
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return fmt.Errorf("invalid include regex pattern '%s': %w", p, err)
+		}
+		f.compiledIncludeRegex = append(f.compiledIncludeRegex, re)
+	}
+
+	f.compiledExcludeRegex = []*regexp.Regexp{}
+	for _, p := range allExcludeRegex {
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return fmt.Errorf("invalid exclude regex pattern '%s': %w", p, err)
+		}
+		f.compiledExcludeRegex = append(f.compiledExcludeRegex, re)
+	}
+
+	return nil
+}
+
+func (f *Filter) GetCompiledIncludeRegex() []*regexp.Regexp {
+	return f.compiledIncludeRegex
+}
+
+func (f *Filter) GetCompiledExcludeRegex() []*regexp.Regexp {
+	return f.compiledExcludeRegex
+}
+
 func GetFilteredFilePaths(db *sql.DB, projectID int64, filter Filter) ([]string, error) {
-	// 1. Compile regex patterns
-	var includesRegex []*regexp.Regexp
-	for _, p := range filter.Includes {
-		if p == "" {
-			continue
-		}
-		re, err := regexp.Compile(p)
-		if err != nil {
-			return nil, fmt.Errorf("invalid 'includes' regex pattern '%s': %w", p, err)
-		}
-		includesRegex = append(includesRegex, re)
-	}
-
-	var excludesRegex []*regexp.Regexp
-	for _, p := range filter.Excludes {
-		if p == "" {
-			continue
-		}
-		re, err := regexp.Compile(p)
-		if err != nil {
-			return nil, fmt.Errorf("invalid 'excludes' regex pattern '%s': %w", p, err)
-		}
-		excludesRegex = append(excludesRegex, re)
-	}
-
-	// 2. Fetch all file paths for the project
 	rows, err := db.Query("SELECT relative_path FROM file_metadata WHERE project_id = ?", projectID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying file metadata: %w", err)
 	}
 	defer rows.Close()
 
-	// 3. Apply filtering logic
 	var resultingPaths []string
 	for rows.Next() {
 		var relativePath string
@@ -56,21 +116,18 @@ func GetFilteredFilePaths(db *sql.DB, projectID int64, filter Filter) ([]string,
 			return nil, fmt.Errorf("error scanning row: %w", err)
 		}
 
-		// Determine if the path should be included
-		matchInclude := len(includesRegex) == 0 || MatchesAny(relativePath, includesRegex)
-		matchExclude := len(excludesRegex) > 0 && MatchesAny(relativePath, excludesRegex)
+		matchInclude := len(filter.compiledIncludeRegex) == 0 || MatchesAny(relativePath, filter.compiledIncludeRegex)
+		matchExclude := len(filter.compiledExcludeRegex) > 0 && MatchesAny(relativePath, filter.compiledExcludeRegex)
 
 		shouldAdd := false
 		if matchInclude && matchExclude {
-			// If a file matches both lists, priority rule applies. Default to 'includes'
 			shouldAdd = (filter.Priority != "excludes")
 		} else if matchInclude {
 			shouldAdd = true
 		} else if matchExclude {
 			shouldAdd = false
 		} else {
-			// If no rules are matched, it's not included unless the includes list was empty.
-			shouldAdd = len(includesRegex) == 0
+			shouldAdd = len(filter.compiledIncludeRegex) == 0
 		}
 
 		if shouldAdd {
@@ -85,7 +142,6 @@ func GetFilteredFilePaths(db *sql.DB, projectID int64, filter Filter) ([]string,
 	return resultingPaths, nil
 }
 
-// MatchesAny checks if the given path matches any of the regex patterns.
 func MatchesAny(path string, patterns []*regexp.Regexp) bool {
 	for _, re := range patterns {
 		if re.MatchString(path) {

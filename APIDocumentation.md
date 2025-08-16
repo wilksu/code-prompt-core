@@ -1,6 +1,6 @@
 # Code Prompt Core - API Documentation
 
-> Generated on: 2025-08-15 00:43:32 CST
+> Generated on: 2025-08-16 00:56:24 CST
 
 # code-prompt-core (Root Command)
 
@@ -60,15 +60,16 @@ Use "code-prompt-core analyze [command] --help" for more information about a com
 ```text
 Filters the cached file metadata based on various criteria provided as a JSON string.
 
-The filter JSON should have the following structure:
+The filter JSON supports both simple and advanced rules:
 {
-  "includes": ["\.go$", "\.md$"],
-  "excludes": ["^vendor/"],
+  "includeExts": ["go", "md"],
+  "excludePaths": ["vendor/"],
+  "includeRegex": ["^cmd/"],
   "priority": "includes"
 }
 
 Example:
-  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includes":[".*\\.go"]}'
+  code-prompt-core analyze filter --project-path /p/proj --filter-json '{"includeExts":[".go"]}'
 
 Usage:
   code-prompt-core analyze filter [flags]
@@ -111,8 +112,15 @@ Global Flags:
 ```text
 Generates a file structure tree, optionally annotating it based on a filter.
 
+The filter (from --filter-json or --profile-name) determines which files are marked as "included".
+The filter JSON supports both simple and advanced rules:
+{
+  "excludeExts": ["md"],
+  "includePaths": ["cmd/"]
+}
+
 Example (JSON output, annotated):
-  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludes":["\\.md$"]}'
+  code-prompt-core analyze tree --project-path /p/proj --filter-json '{"excludeExts":["md"]}'
 
 Usage:
   code-prompt-core analyze tree [flags]
@@ -524,19 +532,27 @@ Global Flags:
 Saves a filter configuration as a named profile for a specific project. If a profile with the same name already exists, it will be updated.
 
 The filter configuration must be provided as a JSON string via the --data flag.
-The JSON structure should be:
+The JSON structure supports both simple and advanced (regex) rules:
 {
-  "includes": ["<regex1>", "<regex2>", ...],
-  "excludes": ["<regex3>", "<regex4>", ...],
+  "includePaths": ["cmd/", "pkg/database/database.go"],
+  "excludePaths": ["vendor/"],
+  "includeExts": ["go", "md"],
+  "excludeExts": ["sum"],
+  "includePrefixes": ["main"],
+  "excludePrefixes": ["test_"],
+  
+  "includeRegex": ["\\.hbs$"],
+  "excludeRegex": ["^\\.git/"],
+  
   "priority": "includes"
 }
 
-- "includes": A list of regex patterns. Files matching any of these will be included.
-- "excludes": A list of regex patterns. Files matching any of these will be excluded.
+- Simple rules (paths, exts, prefixes) are convenient for common cases.
+- Regex rules (includeRegex, excludeRegex) provide maximum flexibility for advanced users.
 - "priority": Optional. Can be "includes" or "excludes". Determines which rule wins if a file matches both lists. Defaults to "includes".
 
 Example:
-  code-prompt-core profiles save --project-path /p/my-go-proj --name "go-files-only" --data '{"includes":["\\.go$"]}'
+  code-prompt-core profiles save --project-path /p/my-proj --name "go-source" --data '{"includeExts":["go"], "excludePaths": ["vendor/"]}'
 
 Usage:
   code-prompt-core profiles save [flags]
@@ -662,17 +678,17 @@ This command aggregates project statistics, file structure, and file contents, t
 
 You can filter the files included in the report using either a saved profile via '--profile-name' or a temporary filter via '--filter-json'. If both are provided, '--filter-json' takes precedence.
 
-The filter JSON structure is:
+The filter JSON structure supports both simple and advanced rules:
 {
-  "includes": ["<regex1>", ...],
-  "excludes": ["<regex2>", ...],
-  "priority": "includes" // or "excludes"
+  "includeExts": ["go"],
+  "excludePaths": ["vendor/"],
+  "priority": "includes"
 }
 
 If the '--output' flag is provided with a file path, the report is saved to that file. Otherwise, the report content is printed directly to the standard output.
 
 Example (using a built-in template and a filter):
-  code-prompt-core report generate --template summary.txt --filter-json '{"includes":["\\.go$"]}' --output report.txt
+  code-prompt-core report generate --template summary.txt --filter-json '{"includeExts":["go"]}' --output report.txt
 
 Usage:
   code-prompt-core report generate [flags]
@@ -705,7 +721,6 @@ The returned JSON format is as follows:
       "name": "summary.txt",
       "description": "A built-in report template."
     }
-    // ... other templates
   ]
 }
 
