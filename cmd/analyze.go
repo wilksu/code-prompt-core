@@ -17,12 +17,39 @@ import (
 )
 
 type TreeNode struct {
-	Name      string      `json:"name"`
-	Path      string      `json:"path"`
-	IsDir     bool        `json:"is_dir"`
-	Status    string      `json:"status,omitempty"`
-	SizeBytes int64       `json:"size_bytes,omitempty"`
-	Children  []*TreeNode `json:"children"`
+	Name           string      `json:"name"`
+	Path           string      `json:"path"`
+	IsDir          bool        `json:"is_dir"`
+	Status         string      `json:"status,omitempty"`
+	SizeBytes      int64       `json:"size_bytes,omitempty"`       // 用于文件
+	TotalSizeBytes int64       `json:"total_size_bytes,omitempty"` // 用于目录
+	TotalFileCount int         `json:"total_file_count,omitempty"` // 用于目录
+	Children       []*TreeNode `json:"children"`
+}
+
+// calculateTreeAggregates 是一个新函数，用于递归计算目录的大小和文件数
+// 它从叶节点（文件）向上聚合到根节点。
+func calculateTreeAggregates(node *TreeNode) (size int64, count int) {
+	if !node.IsDir {
+		// 如果是文件，返回它自己的大小和 1 个计数
+		return node.SizeBytes, 1
+	}
+
+	var totalSize int64
+	var totalCount int
+
+	// 遍历所有子节点
+	for _, child := range node.Children {
+		// 递归调用
+		childSize, childCount := calculateTreeAggregates(child)
+		totalSize += childSize
+		totalCount += childCount
+	}
+
+	// 将聚合结果存回目录节点
+	node.TotalSizeBytes = totalSize
+	node.TotalFileCount = totalCount
+	return totalSize, totalCount
 }
 
 var analyzeCmd = &cobra.Command{
@@ -67,7 +94,12 @@ Example:
 			return
 		}
 
-		f, err := getFilter(db, projectID, "", viper.GetString("analyze.filter.filter-json"))
+		f, err := getFilter(
+			db,
+			projectID,
+			viper.GetString("analyze.filter.profile-name"),
+			viper.GetString("analyze.filter.filter-json"),
+		)
 		if err != nil {
 			printError(err)
 			return
@@ -114,6 +146,115 @@ Example:
 			files = append(files, fileMeta)
 		}
 		printJSON(files)
+	},
+}
+
+// analyzeSummaryCmd 是一个新命令，用于获取过滤后的摘要信息
+var analyzeSummaryCmd = &cobra.Command{
+	Use:   "summary",
+	Short: "Get a metadata summary (total size, count, file list) for a given filter",
+	Long: `Analyzes files matching a filter and returns a JSON summary.
+
+This command is a high-performance way to 'preview' a filter.
+It calculates the total file count, total size, and returns the full metadata
+list for all matching files without reading their content.
+
+This is ideal for an orchestration layer (like your MCP) to decide if a file set is
+too large for a subsequent 'content get' operation before calling the LLM.
+
+Example:
+  code-prompt-core analyze summary --project-path /p/proj --filter-json '{"includeExts":[".go"]}'`,
+	Run: func(cmd *cobra.Command, args []string) {
+		absProjectPath, err := getAbsoluteProjectPath("analyze.summary.project-path")
+		if err != nil {
+			printError(err)
+			return
+		}
+
+		db, err := database.InitializeDB(viper.GetString("db"))
+		if err != nil {
+			printError(fmt.Errorf("error initializing database: %w", err))
+			return
+		}
+		defer db.Close()
+
+		var projectID int64
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
+		if err != nil {
+			printError(fmt.Errorf("error finding project: %w", err))
+			return
+		}
+
+		f, err := getFilter(
+			db,
+			projectID,
+			viper.GetString("analyze.summary.profile-name"),
+			viper.GetString("analyze.summary.filter-json"),
+		)
+		if err != nil {
+			printError(err)
+			return
+		}
+
+		paths, err := filter.GetFilteredFilePaths(db, projectID, f)
+		if err != nil {
+			printError(err)
+			return
+		}
+
+		if len(paths) == 0 {
+			printJSON(map[string]interface{}{
+				"fileCount":      0,
+				"totalSizeBytes": 0,
+				"files":          []interface{}{},
+			})
+			return
+		}
+
+		// 这个查询与 analyze filter 相同
+		query := `
+			SELECT relative_path, filename, extension, size_bytes, line_count, is_text 
+			FROM file_metadata 
+			WHERE project_id = ? AND relative_path IN (?` + strings.Repeat(",?", len(paths)-1) + `)`
+		params := []interface{}{projectID}
+		for _, p := range paths {
+			params = append(params, p)
+		}
+		rows, err := db.Query(query, params...)
+		if err != nil {
+			printError(fmt.Errorf("error fetching metadata: %w", err))
+			return
+		}
+		defer rows.Close()
+
+		// (这是新部分：聚合)
+		type FileMetadata struct {
+			RelativePath string `json:"relative_path"`
+			Filename     string `json:"filename"`
+			Extension    string `json:"extension"`
+			SizeBytes    int64  `json:"size_bytes"`
+			LineCount    int    `json:"line_count"`
+			IsText       bool   `json:"is_text"`
+		}
+		var files []FileMetadata
+		var totalSize int64
+
+		for rows.Next() {
+			var fileMeta FileMetadata
+			if err := rows.Scan(&fileMeta.RelativePath, &fileMeta.Filename, &fileMeta.Extension, &fileMeta.SizeBytes, &fileMeta.LineCount, &fileMeta.IsText); err != nil {
+				printError(fmt.Errorf("error scanning file metadata row: %w", err))
+				return
+			}
+			files = append(files, fileMeta)
+			totalSize += fileMeta.SizeBytes // 聚合大小
+		}
+
+		// (这是新的摘要对象)
+		printJSON(map[string]interface{}{
+			"fileCount":      len(files),
+			"totalSizeBytes": totalSize,
+			"files":          files,
+		})
 	},
 }
 
@@ -192,6 +333,7 @@ var analyzeTreeCmd = &cobra.Command{
 	Use:   "tree",
 	Short: "Generate a file structure tree from the cache",
 	Long: `Generates a file structure tree, optionally annotating it based on a filter.
+This command now also recursively calculates the total size and file count for each directory.
 
 The filter (from --filter-json or --profile-name) determines which files are marked as "included".
 The filter JSON supports both simple and advanced rules:
@@ -241,7 +383,8 @@ Example (JSON output, annotated):
 		for _, path := range includedPaths {
 			includedSet[path] = struct{}{}
 		}
-		rows, err := db.Query("SELECT relative_path FROM file_metadata WHERE project_id = ? ORDER BY relative_path ASC", projectID)
+		// *** 修改：现在也查询 size_bytes ***
+		rows, err := db.Query("SELECT relative_path, size_bytes FROM file_metadata WHERE project_id = ? ORDER BY relative_path ASC", projectID)
 		if err != nil {
 			printError(fmt.Errorf("error querying all file metadata for tree: %w", err))
 			return
@@ -255,7 +398,8 @@ Example (JSON output, annotated):
 
 		for rows.Next() {
 			var dbPath string
-			if err := rows.Scan(&dbPath); err != nil {
+			var size int64 // *** 修改：接收 size_bytes ***
+			if err := rows.Scan(&dbPath, &size); err != nil {
 				printError(fmt.Errorf("error scanning row: %w", err))
 				return
 			}
@@ -276,6 +420,8 @@ Example (JSON output, annotated):
 				if _, exists := nodes[currentPath]; !exists {
 					newNode := &TreeNode{Name: part, Path: currentPath, IsDir: isDir, Children: []*TreeNode{}}
 					if !isDir {
+						// *** 修改：仅在文件节点上设置 SizeBytes ***
+						newNode.SizeBytes = size
 						if _, isIncluded := includedSet[currentPath]; isIncluded {
 							newNode.Status = "included"
 						} else {
@@ -292,6 +438,10 @@ Example (JSON output, annotated):
 				}
 			}
 		}
+
+		// *** 新增：在排序前调用聚合函数 ***
+		calculateTreeAggregates(root)
+
 		sortTree(root)
 		if viper.GetString("analyze.tree.format") == "text" {
 			fmt.Println(root.Name)
@@ -327,7 +477,16 @@ func printPlainTextTree(node *TreeNode, prefix string) {
 		if child.Status == "excluded" {
 			statusMarker = " [excluded]"
 		}
-		fmt.Println(prefix + connector + child.Name + statusMarker)
+		// *** 修改：在文本树中也显示大小信息 ***
+		sizeInfo := ""
+		if child.IsDir {
+			sizeInfo = fmt.Sprintf(" (%d files, %d bytes)", child.TotalFileCount, child.TotalSizeBytes)
+		} else {
+			sizeInfo = fmt.Sprintf(" (%d bytes)", child.SizeBytes)
+		}
+
+		fmt.Println(prefix + connector + child.Name + sizeInfo + statusMarker)
+
 		if child.IsDir {
 			newPrefix := prefix
 			if i == len(node.Children)-1 {
@@ -346,8 +505,19 @@ func init() {
 	analyzeCmd.AddCommand(analyzeFilterCmd)
 	analyzeFilterCmd.Flags().String("project-path", "", "Path to the project")
 	analyzeFilterCmd.Flags().String("filter-json", "", "JSON string with filter conditions")
+	analyzeFilterCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use") // 新增
 	viper.BindPFlag("analyze.filter.project-path", analyzeFilterCmd.Flags().Lookup("project-path"))
 	viper.BindPFlag("analyze.filter.filter-json", analyzeFilterCmd.Flags().Lookup("filter-json"))
+	viper.BindPFlag("analyze.filter.profile-name", analyzeFilterCmd.Flags().Lookup("profile-name")) // 新增
+
+	// *** 新增：注册 analyze summary 命令 ***
+	analyzeCmd.AddCommand(analyzeSummaryCmd)
+	analyzeSummaryCmd.Flags().String("project-path", "", "Path to the project")
+	analyzeSummaryCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use")
+	analyzeSummaryCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")
+	viper.BindPFlag("analyze.summary.project-path", analyzeSummaryCmd.Flags().Lookup("project-path"))
+	viper.BindPFlag("analyze.summary.profile-name", analyzeSummaryCmd.Flags().Lookup("profile-name"))
+	viper.BindPFlag("analyze.summary.filter-json", analyzeSummaryCmd.Flags().Lookup("filter-json"))
 
 	analyzeCmd.AddCommand(analyzeStatsCmd)
 	analyzeStatsCmd.Flags().String("project-path", "", "Path to the project")

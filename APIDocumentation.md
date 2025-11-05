@@ -1,6 +1,6 @@
 # Code Prompt Core - API Documentation
 
-> Generated on: 2025-08-16 10:11:56 CST
+> Generated on: 2025-11-05 22:44:36 CST
 
 # code-prompt-core (Root Command)
 
@@ -44,6 +44,7 @@ Usage:
 Available Commands:
   filter      Filter cached file metadata using JSON or a saved profile
   stats       Generate statistics about the project's cached files
+  summary     Get a metadata summary (total size, count, file list) for a given filter
   tree        Generate a file structure tree from the cache
 
 Global Flags:
@@ -76,6 +77,7 @@ Usage:
 
 Flags:
       --filter-json string    JSON string with filter conditions
+      --profile-name string   Name of a saved filter profile to use
       --project-path string   Path to the project
 
 Global Flags:
@@ -107,10 +109,41 @@ Global Flags:
 ```
 ---
 
+#### code-prompt-core analyze summary
+
+```text
+Analyzes files matching a filter and returns a JSON summary.
+
+This command is a high-performance way to 'preview' a filter.
+It calculates the total file count, total size, and returns the full metadata
+list for all matching files without reading their content.
+
+This is ideal for an orchestration layer (like your MCP) to decide if a file set is
+too large for a subsequent 'content get' operation before calling the LLM.
+
+Example:
+  code-prompt-core analyze summary --project-path /p/proj --filter-json '{"includeExts":[".go"]}'
+
+Usage:
+  code-prompt-core analyze summary [flags]
+
+Flags:
+      --filter-json string    A temporary JSON string with filter conditions
+      --profile-name string   Name of a saved filter profile to use
+      --project-path string   Path to the project
+
+Global Flags:
+      --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
+      --db string       Path to the database file (default "code_prompt.db")
+
+```
+---
+
 #### code-prompt-core analyze tree
 
 ```text
 Generates a file structure tree, optionally annotating it based on a filter.
+This command now also recursively calculates the total size and file count for each directory.
 
 The filter (from --filter-json or --profile-name) determines which files are marked as "included".
 The filter JSON supports both simple and advanced rules:
@@ -415,7 +448,7 @@ Usage:
   code-prompt-core content [command]
 
 Available Commands:
-  get         Batch gets the content of specified files for a project
+  get         Batch gets the content of filtered files for a project
 
 Global Flags:
       --config string   config file (default is $HOME/.config/code-prompt-core/config.yaml)
@@ -429,15 +462,22 @@ Use "code-prompt-core content [command] --help" for more information about a com
 #### code-prompt-core content get
 
 ```text
-Retrieves the contents of multiple files at once using regex filters.
+Retrieves the contents of multiple files at once using a filter.
+
+You can filter the files using either a saved profile via '--profile-name'
+or a temporary filter via '--filter-json'. This command reads the
+file contents from disk based on the file paths retrieved from the cache.
+
+Example:
+  code-prompt-core content get --project-path /p/proj --filter-json '{"includeExts":[".go"]}'
+  code-prompt-core content get --project-path /p/proj --profile-name "go-source"
 
 Usage:
   code-prompt-core content get [flags]
 
 Flags:
-      --excludes string       Comma-separated regex for files to exclude
-      --includes string       Comma-separated regex for files to include
-      --priority string       Priority if a file matches both lists ('includes' or 'excludes') (default "includes")
+      --filter-json string    A temporary JSON string with filter conditions
+      --profile-name string   Name of a saved filter profile to use
       --project-path string   Path to the project
 
 Global Flags:

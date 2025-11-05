@@ -114,12 +114,13 @@ Example (using a built-in template and a filter):
 			return
 		}
 		if strings.Contains(templateContent, "{{> treePartial") {
-			treePartial := `{{#each nodes}}{{this.indent}}├── {{{this.Name}}} {{#if this.SizeBytes}}({{humanizeBytes this.SizeBytes}}){{/if}}{{#if this.isDir}}/{{/if}}
+			treePartial := `{{#each nodes}}{{this.indent}}├── {{{this.Name}}} {{#if this.IsDir}} ({{this.TotalFileCount}} files, {{humanizeBytes this.TotalSizeBytes}}){{else}} ({{humanizeBytes this.SizeBytes}}){{/if}}{{#if this.isDir}}/{{/if}}
 {{#if this.Children}}{{> treePartial nodes=this.Children indent=(append this.indent "    ")}}{{/if}}{{/each}}`
 			raymond.RegisterPartial("treePartial", treePartial)
 			raymond.RegisterHelper("append", func(base, addition string) string {
 				return base + addition
-			})
+			},
+			)
 		}
 
 		f, err := getFilter(
@@ -328,6 +329,9 @@ func getTreeData(db *sql.DB, projectID int64, absProjectPath string) (*TreeNode,
 			}
 		}
 	}
+	// *** 修改：调用在 cmd/analyze.go 中定义的聚合函数 ***
+	calculateTreeAggregates(root)
+
 	// sortTree is defined in cmd/analyze.go, it is shared and correct.
 	sortTree(root)
 	return root, nil

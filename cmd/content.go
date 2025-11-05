@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"code-prompt-core/pkg/database"
 	"code-prompt-core/pkg/filter"
@@ -21,17 +20,21 @@ var contentCmd = &cobra.Command{
 
 var contentGetCmd = &cobra.Command{
 	Use:   "get",
-	Short: "Batch gets the content of specified files for a project",
-	Long:  `Retrieves the contents of multiple files at once using regex filters.`,
+	Short: "Batch gets the content of filtered files for a project",
+	Long: `Retrieves the contents of multiple files at once using a filter.
+
+You can filter the files using either a saved profile via '--profile-name'
+or a temporary filter via '--filter-json'. This command reads the
+file contents from disk based on the file paths retrieved from the cache.
+
+Example:
+  code-prompt-core content get --project-path /p/proj --filter-json '{"includeExts":[".go"]}'
+  code-prompt-core content get --project-path /p/proj --profile-name "go-source"
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 		projectPath, err := getAbsoluteProjectPath("content.get.project-path")
 		if err != nil {
 			printError(err)
-			return
-		}
-		absProjectPath, err := filepath.Abs(projectPath)
-		if err != nil {
-			printError(fmt.Errorf("error resolving absolute path for '%s': %w", projectPath, err))
 			return
 		}
 
@@ -42,20 +45,21 @@ var contentGetCmd = &cobra.Command{
 		}
 		defer db.Close()
 		var projectID int64
-		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", absProjectPath).Scan(&projectID)
+		err = db.QueryRow("SELECT id FROM projects WHERE project_path = ?", projectPath).Scan(&projectID)
 		if err != nil {
 			printError(fmt.Errorf("error finding project: %w", err))
 			return
 		}
 
-		f := filter.Filter{
-			IncludeRegex: strings.Split(viper.GetString("content.get.includes"), ","),
-			ExcludeRegex: strings.Split(viper.GetString("content.get.excludes"), ","),
-			Priority:     viper.GetString("content.get.priority"),
-		}
-
-		if err := f.Compile(); err != nil {
-			printError(fmt.Errorf("error compiling filter rules: %w", err))
+		// *** 修改：使用 getFilter 帮助函数 ***
+		f, err := getFilter(
+			db,
+			projectID,
+			viper.GetString("content.get.profile-name"),
+			viper.GetString("content.get.filter-json"),
+		)
+		if err != nil {
+			printError(err)
 			return
 		}
 
@@ -66,7 +70,8 @@ var contentGetCmd = &cobra.Command{
 		}
 		contentMap := make(map[string]string)
 		for _, relPath := range relativePaths {
-			fullPath := filepath.Join(absProjectPath, filepath.Clean(relPath))
+			// *** 修改：使用 projectPath (abs) ***
+			fullPath := filepath.Join(projectPath, filepath.Clean(relPath))
 			content, err := os.ReadFile(fullPath)
 			if err != nil {
 				contentMap[relPath] = fmt.Sprintf("Error: Unable to read file. %v", err)
@@ -82,13 +87,12 @@ func init() {
 	rootCmd.AddCommand(contentCmd)
 	contentCmd.AddCommand(contentGetCmd)
 
+	// *** 修改：移除旧标志，添加新标志 ***
 	contentGetCmd.Flags().String("project-path", "", "Path to the project")
-	contentGetCmd.Flags().String("includes", "", "Comma-separated regex for files to include")
-	contentGetCmd.Flags().String("excludes", "", "Comma-separated regex for files to exclude")
-	contentGetCmd.Flags().String("priority", "includes", "Priority if a file matches both lists ('includes' or 'excludes')")
+	contentGetCmd.Flags().String("profile-name", "", "Name of a saved filter profile to use")
+	contentGetCmd.Flags().String("filter-json", "", "A temporary JSON string with filter conditions")
 
 	viper.BindPFlag("content.get.project-path", contentGetCmd.Flags().Lookup("project-path"))
-	viper.BindPFlag("content.get.includes", contentGetCmd.Flags().Lookup("includes"))
-	viper.BindPFlag("content.get.excludes", contentGetCmd.Flags().Lookup("excludes"))
-	viper.BindPFlag("content.get.priority", contentGetCmd.Flags().Lookup("priority"))
+	viper.BindPFlag("content.get.profile-name", contentGetCmd.Flags().Lookup("profile-name"))
+	viper.BindPFlag("content.get.filter-json", contentGetCmd.Flags().Lookup("filter-json"))
 }
